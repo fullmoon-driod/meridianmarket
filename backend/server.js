@@ -368,7 +368,7 @@ wss.on('connection', (ws) => {
     }
   });
 });
-
+// MUST use process.env.PORT
 const PORT = process.env.PORT || 4000;
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`Server listening on port ${PORT}`);
