@@ -12,6 +12,13 @@ const wss = new WebSocket.Server({ server });
 app.use(cors());
 app.use(express.json());
 
+// --- SERVE FRONTEND STATIC FILES ---
+app.use(express.static(path.join(__dirname, '../frontend')));
+
+app.get('/', (req, res) => {
+  res.sendFile(path.join(__dirname, '../frontend/index.html'));
+});
+
 // --- DATABASE SETUP ---
 const dbPath = path.resolve(__dirname, 'meridian.db');
 const db = new sqlite3.Database(dbPath, (err) => {
@@ -362,7 +369,7 @@ wss.on('connection', (ws) => {
   });
 });
 
-const PORT = 4000;
-server.listen(PORT, '0.0.0.0',() => {
-  console.log(`Server listening on http://localhost:${PORT}`);
+const PORT = process.env.PORT || 4000;
+server.listen(PORT, '0.0.0.0', () => {
+  console.log(`Server listening on port ${PORT}`);
 });
