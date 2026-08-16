@@ -5,7 +5,7 @@
     "node": "20.x"
   },
   "scripts": {
-    "build": "cd backend && npm install",
+    "build": "cd backend && npm install --build-from-source",
     "start": "npm --prefix backend start"
   }
 }
