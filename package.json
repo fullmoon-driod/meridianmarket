@@ -2,7 +2,7 @@
   "name": "meridianmarket-root",
   "private": true,
   "scripts": {
-    "build": "npm --prefix backend install",
+    "build": "npm --prefix backend install && npm --prefix backend rebuild sqlite3",
     "start": "npm --prefix backend start"
   }
 }
