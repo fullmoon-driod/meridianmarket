@@ -4,6 +4,7 @@ const WebSocket = require('ws');
 const cors = require('cors');
 const sqlite3 = require('sqlite3').verbose();
 const path = require('path');
+const fs = require('fs');
 
 const app = express();
 const server = http.createServer(app);
@@ -13,11 +14,8 @@ app.use(cors());
 app.use(express.json());
 
 // --- SERVE FRONTEND STATIC FILES ---
-app.use(express.static(path.join(__dirname, '../frontend')));
-
-app.get('/', (req, res) => {
-  res.sendFile(path.join(__dirname, '../frontend/index.html'));
-});
+const staticPath = path.resolve(__dirname, '../frontend/dist');
+app.use(express.static(staticPath));
 
 // --- DATABASE SETUP ---
 const dbPath = path.resolve(__dirname, 'meridian.db');
@@ -124,7 +122,6 @@ app.post('/api/register', (req, res) => {
           if (dbErr.message.includes('UNIQUE constraint failed')) {
             return res.status(400).json({ error: 'Email address is already registered.' });
           }
-          // Return the exact database error to help diagnose schema mismatches
           return res.status(500).json({ error: `Registration Failed: ${dbErr.message}` });
         }
 
@@ -233,23 +230,34 @@ app.get('/api/crm/client/:clientId/activity', (req, res) => {
   });
 });
 
-// --- CASHIER ENDPOINT ---
+// --- CASHIER ENDPOINT (UPDATED FOR PENDING APPROVAL & REGIONAL GATEWAYS) ---
 
 app.post('/api/cashier/deposit', (req, res) => {
-  const { amount, method, clientId } = req.body;
+  const { amount, network, method, country, gateway, txHash, clientId } = req.body;
+  
   if (!amount || isNaN(amount) || amount <= 0) {
     return res.status(400).json({ error: 'Invalid deposit amount.' });
   }
 
-  accountState.balance += parseFloat(amount);
-  accountState.equity += parseFloat(amount);
-  accountState.freeMargin += parseFloat(amount);
-
+  // Record pending deposit in CRM logs for Admin approval
   if (clientId) {
-    logClientActivity(clientId, 'DEPOSIT', { amount: parseFloat(amount), method, timestamp: new Date() });
+    logClientActivity(clientId, 'DEPOSIT_PENDING', {
+      amount: parseFloat(amount),
+      network: network || 'TRC20',
+      method: method || 'Crypto',
+      country: country || 'Unspecified',
+      gateway: gateway || 'External Exchange',
+      txHash: txHash || 'EXTERNAL_REDIRECT',
+      status: 'PENDING_APPROVAL',
+      timestamp: new Date()
+    });
   }
 
-  return res.json({ success: true, newBalance: accountState.balance });
+  return res.json({
+    success: true,
+    message: 'Deposit initiated. Pending admin verification.',
+    status: 'PENDING'
+  });
 });
 
 // --- IN-MEMORY TRADING STATE ---
@@ -277,7 +285,7 @@ setInterval(() => {
 
   const btcDelta = (Math.random() - 0.5) * 15;
   marketPrices.BTCUSD.bid = parseFloat((marketPrices.BTCUSD.bid + btcDelta).toFixed(2));
-  marketPrices.BTCUSD.ask = parseFloat((marketPrices.BTCUSD.bid + 10).toFixed(2));
+  marketPrices.BTCUSD.ask = parseFloat((marketPrices.BTCUSD.ask + 10).toFixed(2));
 
   let totalPnL = 0;
   let totalMargin = 0;
@@ -368,8 +376,14 @@ wss.on('connection', (ws) => {
     }
   });
 });
-// MUST use process.env.PORT
-const PORT = process.env.PORT || 4000;
+
+// --- CATCH-ALL ROUTE FOR FRONTEND SPA ---
+app.get('*', (req, res) => {
+  res.sendFile(path.resolve(__dirname, '../frontend/dist/index.html'));
+});
+
+// LISTEN DIRECTLY ON PORT 80 TO ACCEPT STANDARD WEB TRAFFIC
+const PORT = process.env.PORT || 80;
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`Server listening on port ${PORT}`);
 });

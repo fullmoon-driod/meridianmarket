@@ -16,7 +16,8 @@ import {
   Globe,
   Upload,
   Copy,
-  Check
+  Check,
+  ArrowDownLeft
 } from 'lucide-react';
 
 // ==========================================
@@ -29,8 +30,12 @@ const MULTI_ASSET_REGISTRY = {
   'AUD/USD': { name: 'AUD/USD (Australian Dollar)', price: 0.65820, digits: 5, category: 'Forex', spread: '0.3 pips' },
   'XAU/USD': { name: 'XAU/USD (Gold Spot / US Dollar)', price: 2380.50, digits: 2, category: 'Metals', spread: '1.2 pips' },
   'XAG/USD': { name: 'XAG/USD (Silver Spot)', price: 28.40, digits: 2, category: 'Metals', spread: '1.5 pips' },
-  'BTC/USD': { name: 'BTC/USD (Bitcoin Spot)', price: 64200.00, digits: 2, category: 'Crypto', spread: '10.0 pips' },
+  'BTC/USD': { name: 'BTC/USD (Bitcoin Spot)', price: 61500.00, digits: 2, category: 'Crypto', spread: '10.0 pips' },
   'ETH/USD': { name: 'ETH/USD (Ethereum Spot)', price: 3480.00, digits: 2, category: 'Crypto', spread: '1.5 pips' },
+  'NVDA': { name: 'NVIDIA Corp.', price: 128.30, digits: 2, category: 'Stocks', spread: '0.1 pips' },
+  'AAPL': { name: 'Apple Inc.', price: 224.50, digits: 2, category: 'Stocks', spread: '0.1 pips' },
+  'TSLA': { name: 'Tesla Inc.', price: 215.80, digits: 2, category: 'Stocks', spread: '0.2 pips' },
+  'MSFT': { name: 'Microsoft Corp.', price: 416.20, digits: 2, category: 'Stocks', spread: '0.1 pips' },
   'US30': { name: 'US30 (Dow Jones Industrial)', price: 38900.00, digits: 2, category: 'Indices', spread: '2.0 pips' },
   'NAS100': { name: 'NAS100 (US Tech 100 Index)', price: 18250.00, digits: 2, category: 'Indices', spread: '1.8 pips' }
 };
@@ -67,23 +72,19 @@ const REGIONAL_CRYPTO_CONFIG = {
 
 export default function TradingDashboard() {
   const navigate = useNavigate();
-
-  // Client Navigation State: 'terminal' | 'kyc'
   const [activeTab, setActiveTab] = useState('terminal');
-
-  // Multi-Country & User Compliance State
   const [selectedCountry, setSelectedCountry] = useState('Philippines');
   const [kycState, setKycState] = useState({
-    status: 'unverified', // 'unverified' | 'pending' | 'approved'
+    status: 'unverified',
     fullName: '',
     idNumber: '',
     documentType: 'Passport'
   });
 
-  // Financial Balances
-  const [balanceUSD] = useState(10000.00);
-  const [equityUSD] = useState(10480.20);
-  const [marginUsed] = useState(320.00);
+  // Financial Balances (Updated default starting balance to 0.00)
+  const [balanceUSD, setBalanceUSD] = useState(0.00);
+  const [equityUSD, setEquityUSD] = useState(0.00);
+  const [marginUsed] = useState(0.00);
 
   // Active Selected Market Ticker
   const [selectedAssetKey, setSelectedAssetKey] = useState('EUR/USD');
@@ -100,15 +101,21 @@ export default function TradingDashboard() {
   const [takeProfit, setTakeProfit] = useState('');
 
   // Active Open Positions
-  const [openPositions, setOpenPositions] = useState([
-    { id: 101, symbol: 'EUR/USD', type: 'BUY', volume: 1.00, openPrice: 1.08400, currentPrice: 1.08420, sl: 1.08000, tp: 1.09000, pnl: +200.00, time: '10:14:22' },
-    { id: 102, symbol: 'XAU/USD', type: 'SELL', volume: 0.50, openPrice: 2385.00, currentPrice: 2380.50, sl: 2395.00, tp: 2360.00, pnl: +225.00, time: '10:18:05' }
-  ]);
+  const [openPositions, setOpenPositions] = useState([]);
 
-  // Crypto Deposit Modal State
+  // Deposit Modal State
   const [isDepositOpen, setIsDepositOpen] = useState(false);
   const [depositAmountUsdt, setDepositAmountUsdt] = useState('');
   const [copied, setCopied] = useState(false);
+
+  // Withdrawal Modal State
+  const [isWithdrawOpen, setIsWithdrawOpen] = useState(false);
+  const [withdrawForm, setWithdrawForm] = useState({
+    accountName: '',
+    amount: '',
+    paymentMethod: 'Bank Transfer',
+    paymentDetails: ''
+  });
 
   // Filter Assets by Category
   const [assetCategoryFilter, setAssetCategoryFilter] = useState('ALL');
@@ -127,7 +134,6 @@ export default function TradingDashboard() {
         return updated;
       });
     }, 1200);
-
     return () => clearInterval(priceInterval);
   }, []);
 
@@ -135,13 +141,8 @@ export default function TradingDashboard() {
   const activePrice = livePrices[selectedAssetKey] || activeAsset.price;
   const activeCryptoConfig = REGIONAL_CRYPTO_CONFIG[selectedCountry];
 
+  // Unlocked handleExecuteTrade (KYC check removed)
   const handleExecuteTrade = (type) => {
-    if (kycState.status !== 'approved') {
-      alert('⚠️ Account Verification Required!\n\nPlease complete KYC Verification before opening live market positions.');
-      setActiveTab('kyc');
-      return;
-    }
-
     const vol = parseFloat(orderVolume) || 0.1;
     const newPosition = {
       id: Math.floor(1000 + Math.random() * 9000),
@@ -155,7 +156,6 @@ export default function TradingDashboard() {
       pnl: 0.00,
       time: new Date().toLocaleTimeString()
     };
-
     setOpenPositions([newPosition, ...openPositions]);
   };
 
@@ -173,10 +173,20 @@ export default function TradingDashboard() {
     e.preventDefault();
     const amt = parseFloat(depositAmountUsdt) || 0;
     if (amt <= 0) return alert('Please enter a valid USDT deposit amount.');
-
     setIsDepositOpen(false);
     setDepositAmountUsdt('');
     alert(`USDT Deposit request of ${amt.toLocaleString()} USDT (${activeCryptoConfig.platform}) submitted!\n\nStatus: Pending Admin CRM Verification.`);
+  };
+
+  const handleWithdrawSubmit = (e) => {
+    e.preventDefault();
+    const amt = parseFloat(withdrawForm.amount) || 0;
+    if (amt <= 0) return alert('Please enter a valid withdrawal amount.');
+    if (amt > balanceUSD) return alert('Insufficient balance for this withdrawal request.');
+    
+    setIsWithdrawOpen(false);
+    setWithdrawForm({ accountName: '', amount: '', paymentMethod: 'Bank Transfer', paymentDetails: '' });
+    alert(`Withdrawal request of $${amt.toLocaleString()} submitted successfully!\n\nStatus: Pending Processing.`);
   };
 
   const handleKycSubmit = (e) => {
@@ -205,7 +215,6 @@ export default function TradingDashboard() {
               <span className="text-[9px] text-cyan-400 font-mono tracking-widest uppercase">Markets</span>
             </div>
           </div>
-
           {/* CLIENT NAVIGATION */}
           <nav className="hidden md:flex items-center space-x-1 bg-slate-900/90 p-1 rounded-xl border border-slate-800 text-xs font-semibold">
             <button 
@@ -224,7 +233,7 @@ export default function TradingDashboard() {
         </div>
 
         {/* RIGHT TOP CONTROLS */}
-        <div className="flex items-center space-x-4">
+        <div className="flex items-center space-x-3">
           
           {/* REGION SELECTOR */}
           <div className="hidden lg:flex items-center space-x-2 bg-slate-900 px-3 py-1.5 rounded-xl border border-slate-800 text-xs font-mono">
@@ -269,10 +278,19 @@ export default function TradingDashboard() {
           {/* DEPOSIT BUTTON */}
           <button 
             onClick={() => setIsDepositOpen(true)}
-            className="px-4 py-2 bg-gradient-to-r from-cyan-500 to-blue-500 hover:from-cyan-400 hover:to-blue-400 text-slate-950 font-extrabold text-xs rounded-xl transition shadow-lg shadow-cyan-500/20 flex items-center space-x-1.5"
+            className="px-3.5 py-2 bg-gradient-to-r from-cyan-500 to-blue-500 hover:from-cyan-400 hover:to-blue-400 text-slate-950 font-extrabold text-xs rounded-xl transition shadow-lg shadow-cyan-500/20 flex items-center space-x-1.5"
           >
             <Wallet className="w-3.5 h-3.5" />
             <span>Deposit</span>
+          </button>
+
+          {/* WITHDRAW BUTTON */}
+          <button 
+            onClick={() => setIsWithdrawOpen(true)}
+            className="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-white font-extrabold text-xs rounded-xl border border-slate-700 transition flex items-center space-x-1.5"
+          >
+            <ArrowDownLeft className="w-3.5 h-3.5 text-cyan-400" />
+            <span>Withdraw</span>
           </button>
 
           <button 
@@ -305,7 +323,7 @@ export default function TradingDashboard() {
         </div>
         <div className="hidden lg:flex flex-col">
           <span className="text-[10px] text-slate-500 uppercase">Margin Level</span>
-          <span className="text-cyan-400 font-bold">3,275%</span>
+          <span className="text-cyan-400 font-bold">0%</span>
         </div>
         <div className="hidden lg:flex flex-col">
           <span className="text-[10px] text-slate-500 uppercase">Active Leverage</span>
@@ -319,7 +337,6 @@ export default function TradingDashboard() {
           
           {/* CHART & POSITIONS */}
           <div className="lg:col-span-3 space-y-6">
-            
             <div className="bg-slate-900/50 border border-slate-800/80 rounded-2xl p-5 shadow-xl backdrop-blur-sm">
               <div className="flex flex-wrap justify-between items-center gap-4 mb-4">
                 <div className="flex items-center space-x-3">
@@ -339,7 +356,6 @@ export default function TradingDashboard() {
                     <p className="text-xs text-slate-400 font-mono mt-0.5">{activeAsset.name}</p>
                   </div>
                 </div>
-
                 <div className="flex items-center space-x-6 font-mono">
                   <div className="text-right">
                     <span className="text-[10px] text-slate-500 block uppercase">Ask Price</span>
@@ -351,7 +367,7 @@ export default function TradingDashboard() {
                   </div>
                 </div>
               </div>
-
+              
               {/* TradingView Live Embed Container */}
               <div className="w-full h-[420px] bg-slate-950 rounded-xl border border-slate-800 overflow-hidden relative">
                 <iframe 
@@ -370,7 +386,6 @@ export default function TradingDashboard() {
                   <span>Active ECN Positions ({openPositions.length})</span>
                 </h3>
               </div>
-
               {openPositions.length === 0 ? (
                 <div className="text-center py-10 text-xs font-mono text-slate-500 border border-dashed border-slate-800 rounded-xl">
                   No active market orders open. Execute a position from the right panel.
@@ -425,7 +440,6 @@ export default function TradingDashboard() {
                 </div>
               )}
             </div>
-
           </div>
 
           {/* RIGHT COLUMN: MULTI-ASSET SELECTOR & ORDER PANEL */}
@@ -434,7 +448,7 @@ export default function TradingDashboard() {
               <div className="flex justify-between items-center mb-3">
                 <h3 className="text-xs font-bold text-white uppercase font-mono tracking-wider">Asset Selection</h3>
                 <div className="flex space-x-1 text-[10px] font-mono">
-                  {['ALL', 'FX', 'Metals', 'Crypto'].map(cat => (
+                  {['ALL', 'FX', 'Metals', 'Crypto', 'Stocks'].map(cat => (
                     <button 
                       key={cat}
                       onClick={() => setAssetCategoryFilter(cat)}
@@ -445,13 +459,11 @@ export default function TradingDashboard() {
                   ))}
                 </div>
               </div>
-
               <div className="space-y-1.5 max-h-56 overflow-y-auto pr-1">
                 {filteredAssets.map(symbolKey => {
                   const item = MULTI_ASSET_REGISTRY[symbolKey];
                   const pr = livePrices[symbolKey] || item.price;
                   const isSelected = selectedAssetKey === symbolKey;
-
                   return (
                     <div 
                       key={symbolKey}
@@ -487,7 +499,6 @@ export default function TradingDashboard() {
                     className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white font-mono focus:outline-none focus:border-cyan-500" 
                   />
                 </div>
-
                 <div className="grid grid-cols-2 gap-2">
                   <div>
                     <label className="block text-slate-400 uppercase text-[10px] mb-1">Stop Loss</label>
@@ -510,7 +521,6 @@ export default function TradingDashboard() {
                     />
                   </div>
                 </div>
-
                 <div className="grid grid-cols-2 gap-3 pt-2">
                   <button 
                     onClick={() => handleExecuteTrade('BUY')}
@@ -529,9 +539,7 @@ export default function TradingDashboard() {
                 </div>
               </div>
             </div>
-
           </div>
-
         </main>
       )}
 
@@ -545,15 +553,14 @@ export default function TradingDashboard() {
               </div>
               <div>
                 <h2 className="text-xl font-black text-white">Global Regulatory KYC Verification</h2>
-                <p className="text-xs text-slate-400 font-mono">Verify your identity to unlock live market trading and instant withdrawal processing.</p>
+                <p className="text-xs text-slate-400 font-mono">Verify your identity to complete compliance verification.</p>
               </div>
             </div>
-
             {kycState.status === 'approved' ? (
               <div className="bg-emerald-500/10 border border-emerald-500/30 rounded-2xl p-8 text-center text-emerald-400 font-mono space-y-3">
                 <CheckCircle2 className="w-12 h-12 mx-auto" />
                 <h3 className="font-extrabold text-xl">Account Identity Approved</h3>
-                <p className="text-xs text-emerald-300 max-w-md mx-auto">Your account meets financial regulations. You have unrestricted access to execute trades and request deposits.</p>
+                <p className="text-xs text-emerald-300 max-w-md mx-auto">Your account meets financial regulations.</p>
               </div>
             ) : kycState.status === 'pending' ? (
               <div className="bg-amber-500/10 border border-amber-500/30 rounded-2xl p-8 text-center text-amber-400 font-mono space-y-3">
@@ -574,7 +581,6 @@ export default function TradingDashboard() {
                     className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-cyan-500" 
                   />
                 </div>
-
                 <div className="grid grid-cols-2 gap-4">
                   <div>
                     <label className="block text-slate-400 uppercase text-[10px] mb-1">Document Type</label>
@@ -600,7 +606,6 @@ export default function TradingDashboard() {
                     />
                   </div>
                 </div>
-
                 <div>
                   <label className="block text-slate-400 uppercase text-[10px] mb-1">Upload ID Document</label>
                   <div className="border-2 border-dashed border-slate-800 hover:border-cyan-500/50 rounded-xl p-8 text-center cursor-pointer transition bg-slate-950/40">
@@ -608,7 +613,6 @@ export default function TradingDashboard() {
                     <span className="text-slate-300 font-bold block">Click to upload files</span>
                   </div>
                 </div>
-
                 <button 
                   type="submit" 
                   className="w-full py-4 bg-gradient-to-r from-cyan-500 to-blue-500 text-slate-950 font-extrabold rounded-xl transition font-sans text-sm"
@@ -636,8 +640,7 @@ export default function TradingDashboard() {
                 <X className="w-5 h-5" />
               </button>
             </div>
-
-            {/* REGION SELECTOR */}
+            
             <div>
               <label className="block text-slate-400 uppercase font-mono text-[10px] mb-1">Select Region & Platform</label>
               <select 
@@ -651,13 +654,11 @@ export default function TradingDashboard() {
               </select>
             </div>
 
-            {/* ADDRESS & NETWORK DETAILS */}
             <div className="bg-slate-950 border border-slate-800/80 rounded-xl p-4 space-y-3 font-mono text-xs">
               <div className="flex justify-between items-center text-[10px] text-slate-400">
                 <span>Asset: <strong className="text-emerald-400">USDT</strong></span>
                 <span>Network: <strong className="text-amber-400">{activeCryptoConfig.network}</strong></span>
               </div>
-
               <div>
                 <label className="block text-[10px] text-slate-500 uppercase mb-1">Deposit Address ({activeCryptoConfig.platform})</label>
                 <div className="flex items-center space-x-2 bg-slate-900 border border-slate-800 rounded-lg p-2.5">
@@ -670,13 +671,11 @@ export default function TradingDashboard() {
                   </button>
                 </div>
               </div>
-
               <p className="text-[10px] text-slate-500 leading-relaxed">
                 ℹ️ {activeCryptoConfig.instructions} After sending, submit the transaction amount below for admin verification.
               </p>
             </div>
 
-            {/* DEPOSIT FORM */}
             <form onSubmit={handleDepositSubmit} className="space-y-4 text-xs font-mono">
               <div>
                 <label className="block text-slate-400 uppercase text-[10px] mb-1">
@@ -692,7 +691,6 @@ export default function TradingDashboard() {
                   className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2.5 text-white font-mono text-sm focus:outline-none focus:border-cyan-500"
                 />
               </div>
-
               <button 
                 type="submit" 
                 className="w-full py-3.5 bg-gradient-to-r from-cyan-500 to-blue-500 text-slate-950 font-extrabold rounded-xl transition font-sans text-xs"
@@ -704,6 +702,89 @@ export default function TradingDashboard() {
         </div>
       )}
 
+      {/* WITHDRAWAL MODAL */}
+      {isWithdrawOpen && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-md flex items-center justify-center p-4 z-50">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-md w-full p-6 shadow-2xl relative space-y-5">
+            <div className="flex justify-between items-center border-b border-slate-800 pb-3">
+              <div>
+                <h3 className="text-sm font-bold text-white uppercase font-mono">Withdraw Funds</h3>
+                <span className="text-[11px] text-cyan-400 font-mono">
+                  Available: ${balanceUSD.toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                </span>
+              </div>
+              <button onClick={() => setIsWithdrawOpen(false)} className="text-slate-400 hover:text-white">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleWithdrawSubmit} className="space-y-4 text-xs font-mono">
+              <div>
+                <label className="block text-slate-400 uppercase text-[10px] mb-1">Full Account Holder Name</label>
+                <input 
+                  type="text" 
+                  required
+                  placeholder="e.g. John Doe"
+                  value={withdrawForm.accountName}
+                  onChange={(e) => setWithdrawForm({ ...withdrawForm, accountName: e.target.value })}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2.5 text-white font-mono text-sm focus:outline-none focus:border-cyan-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-slate-400 uppercase text-[10px] mb-1">Withdrawal Amount ($)</label>
+                <input 
+                  type="number" 
+                  step="0.01"
+                  required
+                  placeholder="e.g. 1000.00"
+                  value={withdrawForm.amount}
+                  onChange={(e) => setWithdrawForm({ ...withdrawForm, amount: e.target.value })}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2.5 text-white font-mono text-sm focus:outline-none focus:border-cyan-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-slate-400 uppercase text-[10px] mb-1">Payment Method</label>
+                <select 
+                  value={withdrawForm.paymentMethod}
+                  onChange={(e) => setWithdrawForm({ ...withdrawForm, paymentMethod: e.target.value })}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2.5 text-white font-mono text-xs focus:outline-none focus:border-cyan-500"
+                >
+                  <option value="Bank Transfer">Bank Wire / Local Transfer</option>
+                  <option value="USDT (TRC-20)">Crypto - USDT (TRC-20)</option>
+                  <option value="E-Wallet">E-Wallet / Local Provider</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-slate-400 uppercase text-[10px] mb-1">
+                  {withdrawForm.paymentMethod === 'Bank Transfer' ? 'Bank Name & IBAN/Account #' : 
+                   withdrawForm.paymentMethod === 'USDT (TRC-20)' ? 'TRC-20 Wallet Address' : 'E-Wallet ID / Phone'}
+                </label>
+                <input 
+                  type="text" 
+                  required
+                  placeholder={
+                    withdrawForm.paymentMethod === 'Bank Transfer' ? 'e.g. Chase Bank, Acct: 12345678' : 
+                    withdrawForm.paymentMethod === 'USDT (TRC-20)' ? 'e.g. TYa1a63P1vR8zS4mK9uLqN7xW8Y2bZ3x4C' : 'e.g. +1 234 567 890'
+                  }
+                  value={withdrawForm.paymentDetails}
+                  onChange={(e) => setWithdrawForm({ ...withdrawForm, paymentDetails: e.target.value })}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2.5 text-white font-mono text-sm focus:outline-none focus:border-cyan-500"
+                />
+              </div>
+
+              <button 
+                type="submit" 
+                className="w-full py-3.5 bg-gradient-to-r from-cyan-500 to-blue-500 text-slate-950 font-extrabold rounded-xl transition font-sans text-xs"
+              >
+                Submit Withdrawal Request
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

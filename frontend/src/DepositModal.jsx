@@ -1,13 +1,39 @@
 import React, { useState } from 'react';
-import { X, Copy, Check, ShieldCheck, ArrowRight, Wallet, UserCheck } from 'lucide-react';
+import { X, Copy, Check, ShieldCheck, ArrowRight, Wallet, UserCheck, ExternalLink, Globe } from 'lucide-react';
 
 export default function DepositModal({ isOpen, onClose, user, onDepositSubmit, onOpenKyc }) {
+  const [selectedCountry, setSelectedCountry] = useState('Philippines');
   const [selectedNetwork, setSelectedNetwork] = useState('TRC20');
   const [copied, setCopied] = useState(false);
   const [amount, setAmount] = useState('');
   const [txHash, setTxHash] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
+
+  // Country Configuration mapping gateways, redirect URLs, and UI accents
+  const countryConfig = {
+    Philippines: {
+      gatewayName: 'Coins.ph',
+      currency: 'PHP',
+      redirectUrl: 'https://coins.ph',
+      badgeColor: 'bg-cyan-500/10 text-cyan-400 border-cyan-500/20',
+      guideText: 'Open your Coins.ph app → Select Crypto (USDT) → Send/Withdraw to the wallet address below.',
+    },
+    Malaysia: {
+      gatewayName: 'Luno',
+      currency: 'MYR',
+      redirectUrl: 'https://www.luno.com/login',
+      badgeColor: 'bg-blue-500/10 text-blue-400 border-blue-500/20',
+      guideText: 'Open your Luno app → Select Crypto Wallet → Send/Transfer to the wallet address below.',
+    },
+    Thailand: {
+      gatewayName: 'Binance',
+      currency: 'THB',
+      redirectUrl: 'https://www.binance.com',
+      badgeColor: 'bg-amber-500/10 text-amber-400 border-amber-500/20',
+      guideText: 'Open your Binance App → Go to Deposit/Withdraw Crypto → Send to the wallet address below.',
+    },
+  };
 
   const walletAddresses = {
     TRC20: 'TYu8X9pLqZk2mN3vR5wB7xP1aS4dE6fG8H',
@@ -16,6 +42,7 @@ export default function DepositModal({ isOpen, onClose, user, onDepositSubmit, o
 
   if (!isOpen) return null;
 
+  const currentConfig = countryConfig[selectedCountry];
   const currentAddress = walletAddresses[selectedNetwork];
 
   const handleCopy = () => {
@@ -26,23 +53,30 @@ export default function DepositModal({ isOpen, onClose, user, onDepositSubmit, o
 
   const handleSubmitDeposit = (e) => {
     e.preventDefault();
-    if (!amount || !txHash) return;
+    if (!amount) return;
 
     setIsSubmitting(true);
 
     setTimeout(() => {
       setIsSubmitting(false);
       setSubmitted(true);
+
+      // 1. Submit pending deposit data to backend / parent callback
       if (onDepositSubmit) {
         onDepositSubmit({
           amount: parseFloat(amount),
-          txHash,
+          txHash: txHash || 'EXTERNAL_REDIRECT',
           network: selectedNetwork,
-          method: 'Coins.ph USDT',
+          country: selectedCountry,
+          gateway: currentConfig.gatewayName,
+          method: `${currentConfig.gatewayName} USDT`,
           timestamp: new Date().toISOString(),
         });
       }
-    }, 1200);
+
+      // 2. Immediately redirect client to their country's exchange gateway
+      window.open(currentConfig.redirectUrl, '_blank');
+    }, 1000);
   };
 
   const handleReset = () => {
@@ -70,8 +104,12 @@ export default function DepositModal({ isOpen, onClose, user, onDepositSubmit, o
               <Wallet className="w-4 h-4" />
             </div>
             <div>
-              <h2 className="font-bold text-sm tracking-wide text-white">Deposit via Coins.ph (USDT)</h2>
-              <p className="text-[11px] text-slate-400">Fast PHP to USDT transfer via Philippine Gateway</p>
+              <h2 className="font-bold text-sm tracking-wide text-white">
+                Deposit via {currentConfig.gatewayName} (USDT)
+              </h2>
+              <p className="text-[11px] text-slate-400">
+                Regional Gateway Transfer for {selectedCountry}
+              </p>
             </div>
           </div>
           <button onClick={onClose} className="p-1 text-slate-400 hover:text-white rounded-lg transition-all">
@@ -82,16 +120,46 @@ export default function DepositModal({ isOpen, onClose, user, onDepositSubmit, o
         {!submitted ? (
           <div className="p-6 space-y-5">
             
-            <div className="bg-slate-950 p-3.5 border border-slate-800 rounded-xl flex items-start gap-3">
-              <div className="bg-cyan-500/10 text-cyan-400 p-1.5 rounded-lg text-xs font-bold font-mono mt-0.5">
-                PHP
-              </div>
-              <div className="text-xs text-slate-300">
-                <span className="font-bold text-white block mb-0.5">Coins.ph Transfer Guide:</span>
-                Open your <strong className="text-cyan-400">Coins.ph app</strong> &rarr; Select <strong>Crypto (USDT)</strong> &rarr; Send/Withdraw to the wallet address below.
+            {/* Country Selector */}
+            <div>
+              <label className="text-[11px] font-mono text-slate-400 block mb-2 uppercase tracking-wider flex items-center gap-1.5">
+                <Globe className="w-3.5 h-3.5 text-slate-400" /> Select Region / Gateway
+              </label>
+              <div className="grid grid-cols-3 gap-2">
+                {Object.keys(countryConfig).map((country) => (
+                  <button
+                    key={country}
+                    type="button"
+                    onClick={() => setSelectedCountry(country)}
+                    className={`py-2 px-2.5 rounded-xl border text-xs font-mono font-bold transition-all flex flex-col items-center justify-center gap-1 ${
+                      selectedCountry === country
+                        ? 'bg-emerald-500/10 border-emerald-400 text-emerald-400 shadow-md shadow-emerald-500/5'
+                        : 'bg-slate-800/50 border-slate-700/60 text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    <span>{country}</span>
+                    <span className="text-[9px] text-slate-400 font-normal">
+                      {countryConfig[country].gatewayName}
+                    </span>
+                  </button>
+                ))}
               </div>
             </div>
 
+            {/* Dynamic Gateway Guide */}
+            <div className="bg-slate-950 p-3.5 border border-slate-800 rounded-xl flex items-start gap-3">
+              <div className={`p-1.5 rounded-lg text-xs font-bold font-mono mt-0.5 border ${currentConfig.badgeColor}`}>
+                {currentConfig.currency}
+              </div>
+              <div className="text-xs text-slate-300">
+                <span className="font-bold text-white block mb-0.5">
+                  {currentConfig.gatewayName} Gateway Instructions:
+                </span>
+                {currentConfig.guideText}
+              </div>
+            </div>
+
+            {/* USDT Network Choice */}
             <div>
               <label className="text-[11px] font-mono text-slate-400 block mb-2 uppercase tracking-wider">
                 Select USDT Network
@@ -115,9 +183,10 @@ export default function DepositModal({ isOpen, onClose, user, onDepositSubmit, o
               </div>
             </div>
 
+            {/* Deposit Address */}
             <div>
               <label className="text-[11px] font-mono text-slate-400 block mb-1.5 uppercase tracking-wider">
-                Deposit Address (Coins.ph Destination)
+                Deposit Destination Address
               </label>
               <div className="flex items-center gap-2 bg-slate-950 p-3 rounded-xl border border-slate-800">
                 <code className="text-xs font-mono text-emerald-400 flex-1 truncate">{currentAddress}</code>
@@ -132,6 +201,7 @@ export default function DepositModal({ isOpen, onClose, user, onDepositSubmit, o
               </div>
             </div>
 
+            {/* Form Inputs */}
             <form onSubmit={handleSubmitDeposit} className="space-y-4 pt-2 border-t border-slate-800">
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
@@ -148,11 +218,12 @@ export default function DepositModal({ isOpen, onClose, user, onDepositSubmit, o
                   />
                 </div>
                 <div>
-                  <label className="text-[11px] font-mono text-slate-400 block mb-1">Coins.ph TxID / Reference No.</label>
+                  <label className="text-[11px] font-mono text-slate-400 block mb-1">
+                    TxID / Ref No. (Optional)
+                  </label>
                   <input
                     type="text"
                     placeholder="Paste transaction hash"
-                    required
                     value={txHash}
                     onChange={(e) => setTxHash(e.target.value)}
                     className="w-full bg-slate-950 border border-slate-800 rounded-xl p-2.5 text-xs font-mono text-white focus:outline-none focus:border-cyan-400"
@@ -166,50 +237,52 @@ export default function DepositModal({ isOpen, onClose, user, onDepositSubmit, o
                 className="w-full py-3 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold font-mono text-xs rounded-xl transition-all shadow-lg shadow-emerald-500/10 flex items-center justify-center gap-2"
               >
                 {isSubmitting ? (
-                  <span>Verifying Transfer...</span>
+                  <span>Initiating Gateway Redirect...</span>
                 ) : (
                   <>
-                    <span>Confirm Coins.ph Deposit</span>
-                    <ArrowRight className="w-4 h-4" />
+                    <span>Proceed to {currentConfig.gatewayName}</span>
+                    <ExternalLink className="w-4 h-4" />
                   </>
                 )}
               </button>
             </form>
           </div>
         ) : (
-          /* Confirmation State with Direct KYC CTA */
+          /* Confirmation State with Updated Step 3 Guidance */
           <div className="p-8 text-center space-y-4">
             <div className="w-12 h-12 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center mx-auto border border-emerald-500/30">
               <ShieldCheck className="w-6 h-6" />
             </div>
             <div>
-              <h3 className="text-base font-bold text-white mb-1">Deposit Submitted!</h3>
+              <h3 className="text-base font-bold text-white mb-1">Deposit Request Recorded!</h3>
               <p className="text-xs text-slate-400 max-w-xs mx-auto">
-                We are validating your transfer of <strong className="text-emerald-400">${amount} USDT</strong>.
+                We are tracking your pending transfer of <strong className="text-emerald-400">${amount} USDT</strong> via {currentConfig.gatewayName}.
               </p>
             </div>
 
-            <div className="p-3.5 bg-slate-950 border border-slate-800 rounded-xl text-left text-xs space-y-1">
-              <span className="text-cyan-400 font-bold block flex items-center gap-1.5">
-                <UserCheck className="w-4 h-4" /> Step 2: Identity Verification
+            {/* STEP 3: ACCOUNT & IDENTITY VERIFICATION */}
+            <div className="p-3.5 bg-slate-950 border border-slate-800 rounded-xl text-left text-xs space-y-2">
+              <span className="text-cyan-400 font-bold flex items-center gap-1.5">
+                <UserCheck className="w-4 h-4" /> Step 3: Identity & Account Verification
               </span>
-              <p className="text-slate-400 text-[11px]">
-                To activate full account access and trading withdrawals, please complete your account KYC verification.
+              <p className="text-slate-400 text-[11px] leading-relaxed">
+                Once your payment is dispatched via {currentConfig.gatewayName}, complete your account KYC verification to enable live trading execution and instant withdrawals.
               </p>
             </div>
 
-            <div className="flex gap-3">
+            <div className="flex gap-3 pt-2">
               <button
                 onClick={handleReset}
                 className="w-1/2 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-mono transition-all"
               >
-                Skip for Now
+                Done
               </button>
               <button
                 onClick={handleProceedToKyc}
-                className="w-1/2 py-2.5 bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold rounded-xl text-xs font-mono transition-all shadow-md shadow-cyan-500/10"
+                className="w-1/2 py-2.5 bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold rounded-xl text-xs font-mono transition-all shadow-md shadow-cyan-500/10 flex items-center justify-center gap-1"
               >
-                Verify Identity Now &rarr;
+                <span>Verify Identity Now</span>
+                <ArrowRight className="w-3.5 h-3.5" />
               </button>
             </div>
           </div>
