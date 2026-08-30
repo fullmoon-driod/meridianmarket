@@ -12,22 +12,18 @@ import {
   Clock,
   Phone,
   PhoneCall,
-  EyeOff
+  EyeOff,
+  Bell,
+  Wifi,
+  WifiOff
 } from 'lucide-react';
 
 export default function AdminPortal() {
   // -------------------------------------------------------------
   // 1. AUTH & ROLE MANAGEMENT
+  // Starts as null so user must authenticate on fresh loads
   // -------------------------------------------------------------
-  const [currentUser, setCurrentUser] = useState(() => {
-    try {
-      const savedUser = localStorage.getItem('crm_current_user');
-      return savedUser ? JSON.parse(savedUser) : null;
-    } catch {
-      return null;
-    }
-  });
-
+  const [currentUser, setCurrentUser] = useState(null);
   const [loginEmail, setLoginEmail] = useState('');
   const [loginPassword, setLoginPassword] = useState('');
   const [loginError, setLoginError] = useState('');
@@ -35,27 +31,24 @@ export default function AdminPortal() {
   const handleLogin = (e) => {
     e.preventDefault();
     setLoginError('');
-
+    
     if (loginEmail === 'admin@meridian.com' && loginPassword === 'admin123') {
       const user = { name: 'Master Admin', email: loginEmail, role: 'ADMIN', agentId: 'ADMIN_01' };
       setCurrentUser(user);
-      localStorage.setItem('crm_current_user', JSON.stringify(user));
       return;
     }
-
+    
     if (loginEmail === 'agent@meridian.com' && loginPassword === 'agent123') {
       const user = { name: 'Sarah Jenkins', email: loginEmail, role: 'AGENT', agentId: 'Sarah Jenkins' };
       setCurrentUser(user);
-      localStorage.setItem('crm_current_user', JSON.stringify(user));
       return;
     }
-
+    
     setLoginError('Invalid credentials. Use admin@meridian.com / admin123 or agent@meridian.com / agent123');
   };
 
   const handleLogout = () => {
     setCurrentUser(null);
-    localStorage.removeItem('crm_current_user');
   };
 
   // -------------------------------------------------------------
@@ -63,10 +56,11 @@ export default function AdminPortal() {
   // -------------------------------------------------------------
   const [activeCrmTab, setActiveCrmTab] = useState('assigned');
   const [searchQuery, setSearchQuery] = useState('');
+  const [showNotifications, setShowNotifications] = useState(false);
   const availableAgents = ['Sarah Jenkins', 'Marcus Vance', 'Alex Rivera', 'Unassigned'];
 
   // -------------------------------------------------------------
-  // 3. CLIENTS DATA (Safe LocalStorage Parsing)
+  // 3. CLIENTS DATA & ONLINE STATUS
   // -------------------------------------------------------------
   const [clients, setClients] = useState(() => {
     const savedClients = localStorage.getItem('crm_clients');
@@ -88,6 +82,7 @@ export default function AdminPortal() {
         kycStatus: 'REJECTED',
         balanceUSD: 500.00,
         bonusUSD: 0.00,
+        isOnline: true,
         callNotes: ['Called on 10/08: Expressed interest in crypto trading.']
       },
       {
@@ -100,7 +95,21 @@ export default function AdminPortal() {
         kycStatus: 'VERIFIED',
         balanceUSD: 10480.20,
         bonusUSD: 250.00,
+        isOnline: false,
         callNotes: ['Awaiting follow-up regarding foreign exchange leverage options.']
+      },
+      {
+        id: 'CL-3391',
+        name: 'Elena Rostova',
+        email: 'elena.r@outmail.com',
+        phone: '+63 917 555 0192',
+        ip: '103.22.201.4 (Manila, PH)',
+        assignedAgent: 'Sarah Jenkins',
+        kycStatus: 'VERIFIED',
+        balanceUSD: 3200.00,
+        bonusUSD: 100.00,
+        isOnline: true,
+        callNotes: ['Initial onboarding call complete.']
       }
     ];
   });
@@ -109,15 +118,17 @@ export default function AdminPortal() {
     localStorage.setItem('crm_clients', JSON.stringify(clients));
   }, [clients]);
 
-  // Memoize visible clients to prevent infinite re-render loop
+  // Memoize visible clients according to role permissions
   const visibleClients = useMemo(() => {
     return clients.filter(c => {
       const q = searchQuery.toLowerCase();
       const matchesSearch = 
         (c.name || '').toLowerCase().includes(q) ||
-        (c.email || '').toLowerCase().includes(q) ||
         (c.id || '').toLowerCase().includes(q) ||
-        (c.ip || '').toLowerCase().includes(q);
+        (currentUser?.role === 'ADMIN' && (
+          (c.email || '').toLowerCase().includes(q) ||
+          (c.ip || '').toLowerCase().includes(q)
+        ));
 
       if (!currentUser) return false;
       if (currentUser.role === 'ADMIN') return matchesSearch;
@@ -127,17 +138,26 @@ export default function AdminPortal() {
   }, [clients, searchQuery, currentUser]);
 
   // -------------------------------------------------------------
-  // 4. KYC & FINANCIAL QUEUES
+  // 4. NOTIFICATIONS & FINANCIAL TRANSACTIONS
   // -------------------------------------------------------------
-  const [kycQueue, setKycQueue] = useState([
+  const [notifications, setNotifications] = useState([
     {
-      id: 'CL-9012',
-      name: 'Elena Rostova',
-      email: 'elena.r@outmail.com',
-      docType: 'Passport',
-      docId: 'P-8820192',
-      submittedAt: '10:14 AM Today',
-      ip: '103.22.201.4 (Manila, Philippines)'
+      id: 'NT-101',
+      clientId: 'CL-4109',
+      clientName: 'David Miller',
+      type: 'DEPOSIT',
+      amountUSD: 2500.00,
+      timestamp: '11:05 AM',
+      unread: true
+    },
+    {
+      id: 'NT-102',
+      clientId: 'CL-8821',
+      clientName: 'Alex Vance',
+      type: 'WITHDRAWAL',
+      amountUSD: 150.00,
+      timestamp: '11:42 AM',
+      unread: true
     }
   ]);
 
@@ -152,13 +172,23 @@ export default function AdminPortal() {
       method: 'UK Bank Wire (HSBC)',
       requestedAt: '11:05 AM Today',
       status: 'PENDING'
+    },
+    {
+      id: 'TX-9902',
+      clientId: 'CL-8821',
+      clientName: 'Alex Vance',
+      type: 'WITHDRAWAL',
+      amountUSD: 150.00,
+      localCurrency: '150.00 USD',
+      method: 'Crypto (USDT)',
+      requestedAt: '11:42 AM Today',
+      status: 'PENDING'
     }
   ]);
 
   const [selectedClientId, setSelectedClientId] = useState('');
   const [adjustmentType, setAdjustmentType] = useState('ADD');
   const [adjustmentAmount, setAdjustmentAmount] = useState('');
-  const [adjustmentReason, setAdjustmentReason] = useState('Manual Credit Adjustment');
 
   useEffect(() => {
     if (visibleClients.length > 0 && !visibleClients.some(c => c.id === selectedClientId)) {
@@ -166,30 +196,9 @@ export default function AdminPortal() {
     }
   }, [visibleClients, selectedClientId]);
 
-  // Handlers
+  // Handlers (Admin Only Operations)
   const handleAssignAgent = (clientId, newAgent) => {
     setClients(clients.map(c => c.id === clientId ? { ...c, assignedAgent: newAgent } : c));
-  };
-
-  const handleApproveKyc = (item) => {
-    const newClient = {
-      id: item.id,
-      name: item.name,
-      email: item.email,
-      phone: '+63 917 555 0192',
-      ip: item.ip,
-      assignedAgent: 'Unassigned',
-      kycStatus: 'VERIFIED',
-      balanceUSD: 0.00,
-      bonusUSD: 0.00,
-      callNotes: []
-    };
-    setClients([newClient, ...clients]);
-    setKycQueue(kycQueue.filter(k => k.id !== item.id));
-  };
-
-  const handleRejectKyc = (id) => {
-    setKycQueue(kycQueue.filter(k => k.id !== id));
   };
 
   const handleApproveTransaction = (tx) => {
@@ -200,7 +209,6 @@ export default function AdminPortal() {
       }
       return client;
     }));
-
     setPendingTransactions(pendingTransactions.filter(t => t.id !== tx.id));
   };
 
@@ -224,10 +232,10 @@ export default function AdminPortal() {
       }
       return client;
     }));
-
+    
     const targetClient = clients.find(c => c.id === selectedClientId);
     setAdjustmentAmount('');
-    alert(`Successfully processed ${adjustmentType} of $${amt.toFixed(2)} for ${targetClient?.name || 'Client'}.`);
+    alert(`Processed ${adjustmentType} of $${amt.toFixed(2)} for ${targetClient?.name || 'Client'}.`);
   };
 
   // -------------------------------------------------------------
@@ -259,24 +267,11 @@ export default function AdminPortal() {
       }
       return c;
     }));
-
     setActiveCallClient({
       ...activeCallClient,
       callNotes: [noteText, ...(activeCallClient.callNotes || [])]
     });
     setNewNote('');
-  };
-
-  const maskEmail = (email = '') => {
-    if (currentUser?.role === 'ADMIN') return email;
-    const parts = email.split('@');
-    if (parts.length < 2) return '***@***';
-    return `${parts[0].substring(0, 2)}***@${parts[1]}`;
-  };
-
-  const maskPhone = (phone = '') => {
-    if (currentUser?.role === 'ADMIN') return phone;
-    return phone.replace(/(\+\d{1,3}\s?)\d+(\d{4})/, '$1*** *** $2');
   };
 
   // -------------------------------------------------------------
@@ -291,7 +286,7 @@ export default function AdminPortal() {
               <Shield className="w-8 h-8 text-cyan-400" />
             </div>
             <h1 className="text-xl font-black text-white tracking-widest uppercase">MERIDIAN CRM</h1>
-            <p className="text-xs text-slate-400 font-mono">Back-Office Security Authentication</p>
+            <p className="text-xs text-slate-400 font-mono">Authentication Required</p>
           </div>
 
           <form onSubmit={handleLogin} className="space-y-4 font-mono text-xs">
@@ -300,7 +295,6 @@ export default function AdminPortal() {
                 {loginError}
               </div>
             )}
-
             <div>
               <label className="block text-slate-400 uppercase mb-1">Email Terminal ID</label>
               <input 
@@ -334,8 +328,8 @@ export default function AdminPortal() {
           </form>
 
           <div className="border-t border-slate-900 pt-4 text-[11px] font-mono text-slate-500 space-y-1">
-            <p><strong>Admin Demo:</strong> admin@meridian.com / admin123</p>
-            <p><strong>Agent Demo:</strong> agent@meridian.com / agent123</p>
+            <p><strong>Admin Portal:</strong> admin@meridian.com / admin123</p>
+            <p><strong>Agent Portal:</strong> agent@meridian.com / agent123</p>
           </div>
         </div>
       </div>
@@ -365,13 +359,61 @@ export default function AdminPortal() {
           </div>
         </div>
 
-        <button 
-          onClick={handleLogout} 
-          className="px-4 py-2 bg-slate-900 border border-slate-800 hover:border-slate-700 text-xs text-slate-300 rounded-xl font-mono flex items-center space-x-2 transition cursor-pointer"
-        >
-          <LogOut className="w-3.5 h-3.5 text-slate-400" />
-          <span>Exit Session</span>
-        </button>
+        <div className="flex items-center space-x-4">
+          {/* NOTIFICATION CENTER */}
+          <div className="relative">
+            <button 
+              onClick={() => setShowNotifications(!showNotifications)}
+              className="p-2 bg-slate-900 border border-slate-800 hover:border-slate-700 text-slate-300 rounded-xl relative cursor-pointer"
+            >
+              <Bell className="w-4 h-4 text-cyan-400" />
+              {notifications.some(n => n.unread) && (
+                <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-rose-500 rounded-full animate-pulse" />
+              )}
+            </button>
+
+            {showNotifications && (
+              <div className="absolute right-0 mt-3 w-80 bg-slate-950 border border-slate-800 rounded-2xl shadow-2xl p-4 font-mono text-xs z-50">
+                <div className="flex justify-between items-center pb-2 border-b border-slate-800 mb-3">
+                  <span className="font-bold text-white uppercase">Activity Notifications</span>
+                  <button 
+                    onClick={() => setNotifications(notifications.map(n => ({ ...n, unread: false })))}
+                    className="text-[10px] text-cyan-400 hover:underline"
+                  >
+                    Clear Badges
+                  </button>
+                </div>
+                <div className="space-y-2 max-h-60 overflow-y-auto">
+                  {notifications.length === 0 ? (
+                    <p className="text-slate-500 text-center py-2">No active notifications</p>
+                  ) : (
+                    notifications.map(n => (
+                      <div key={n.id} className="p-2.5 bg-slate-900/80 border border-slate-800/80 rounded-xl space-y-1">
+                        <div className="flex justify-between items-center font-bold">
+                          <span className={n.type === 'DEPOSIT' ? 'text-emerald-400' : 'text-amber-400'}>
+                            [{n.type}] Initiated
+                          </span>
+                          <span className="text-[10px] text-slate-500">{n.timestamp}</span>
+                        </div>
+                        <p className="text-slate-300">
+                          {n.clientName} requested ${n.amountUSD.toFixed(2)} USD
+                        </p>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+
+          <button 
+            onClick={handleLogout} 
+            className="px-4 py-2 bg-slate-900 border border-slate-800 hover:border-slate-700 text-xs text-slate-300 rounded-xl font-mono flex items-center space-x-2 transition cursor-pointer"
+          >
+            <LogOut className="w-3.5 h-3.5 text-slate-400" />
+            <span>Exit Session</span>
+          </button>
+        </div>
       </header>
 
       <main className="flex-1 max-w-7xl w-full mx-auto p-8 space-y-6">
@@ -386,35 +428,20 @@ export default function AdminPortal() {
               }`}
             >
               <Users className="w-4 h-4" />
-              <span>{currentUser.role === 'ADMIN' ? 'All Clients' : 'My Clients'} ({visibleClients.length})</span>
+              <span>{currentUser.role === 'ADMIN' ? 'All Clients' : 'My Assigned Clients'} ({visibleClients.length})</span>
             </button>
-
             {currentUser.role === 'ADMIN' && (
-              <>
-                <button
-                  onClick={() => setActiveCrmTab('kyc_queue')}
-                  className={`px-5 py-2.5 rounded-xl border text-xs font-bold transition flex items-center space-x-2 cursor-pointer ${
-                    activeCrmTab === 'kyc_queue'
-                      ? 'bg-cyan-500/10 border-cyan-500/80 text-cyan-400'
-                      : 'bg-slate-900/60 border-slate-800 text-slate-400 hover:text-white'
-                  }`}
-                >
-                  <FileCheck className="w-4 h-4" />
-                  <span>KYC Queue ({kycQueue.length})</span>
-                </button>
-
-                <button
-                  onClick={() => setActiveCrmTab('financial_ops')}
-                  className={`px-5 py-2.5 rounded-xl border text-xs font-bold transition flex items-center space-x-2 cursor-pointer ${
-                    activeCrmTab === 'financial_ops'
-                      ? 'bg-cyan-500/10 border-cyan-500/80 text-cyan-400'
-                      : 'bg-slate-900/60 border-slate-800 text-slate-400 hover:text-white'
-                  }`}
-                >
-                  <Wallet className="w-4 h-4 text-emerald-400" />
-                  <span>Financial Control ({pendingTransactions.length})</span>
-                </button>
-              </>
+              <button
+                onClick={() => setActiveCrmTab('financial_ops')}
+                className={`px-5 py-2.5 rounded-xl border text-xs font-bold transition flex items-center space-x-2 cursor-pointer ${
+                  activeCrmTab === 'financial_ops'
+                    ? 'bg-cyan-500/10 border-cyan-500/80 text-cyan-400'
+                    : 'bg-slate-900/60 border-slate-800 text-slate-400 hover:text-white'
+                }`}
+              >
+                <Wallet className="w-4 h-4 text-emerald-400" />
+                <span>Financial Control ({pendingTransactions.length})</span>
+              </button>
             )}
           </div>
 
@@ -422,7 +449,7 @@ export default function AdminPortal() {
             <Search className="w-4 h-4 text-slate-500 absolute left-3.5 top-3" />
             <input 
               type="text"
-              placeholder="Search clients..."
+              placeholder={currentUser.role === 'ADMIN' ? "Search name, ID, email, IP..." : "Search name or ID..."}
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               className="w-full bg-slate-900/80 border border-slate-800 rounded-xl pl-10 pr-4 py-2 text-xs font-mono text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500 transition"
@@ -435,12 +462,12 @@ export default function AdminPortal() {
             <table className="w-full text-left font-mono text-xs">
               <thead>
                 <tr className="border-b border-slate-800/80 bg-slate-950/60 text-slate-400 font-sans font-semibold">
-                  <th className="py-4 px-6">Client Details</th>
-                  <th className="py-4 px-6">Protected Contact</th>
+                  <th className="py-4 px-6">Client Identity</th>
+                  <th className="py-4 px-6">Status</th>
+                  <th className="py-4 px-6">Protected Data (Admin Only)</th>
                   <th className="py-4 px-6">Balance & Bonus</th>
                   <th className="py-4 px-6">Assigned Agent</th>
-                  <th className="py-4 px-6">KYC Status</th>
-                  <th className="py-4 px-6 text-right">Call Center</th>
+                  <th className="py-4 px-6 text-right">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-800/50">
@@ -450,16 +477,33 @@ export default function AdminPortal() {
                       <div className="font-bold text-white text-sm">{client.name}</div>
                       <div className="text-[10px] text-slate-500 uppercase tracking-wider mt-0.5">ID: {client.id}</div>
                     </td>
-
-                    <td className="py-5 px-6 space-y-1">
-                      <div className="text-cyan-400 font-semibold flex items-center space-x-1">
-                        <span>{maskEmail(client.email)}</span>
-                        {currentUser.role !== 'ADMIN' && <EyeOff className="w-3 h-3 text-slate-600 ml-1" />}
-                      </div>
-                      <div className="text-slate-300">{maskPhone(client.phone)}</div>
-                      <div className="text-[10px] text-slate-500">🌐 IP: {client.ip}</div>
+                    <td className="py-5 px-6">
+                      {client.isOnline ? (
+                        <span className="inline-flex items-center space-x-1 px-2.5 py-1 text-[10px] font-bold rounded bg-emerald-500/10 border border-emerald-500/30 text-emerald-400">
+                          <Wifi className="w-3 h-3" />
+                          <span>ONLINE</span>
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center space-x-1 px-2.5 py-1 text-[10px] font-bold rounded bg-slate-800 border border-slate-700 text-slate-400">
+                          <WifiOff className="w-3 h-3" />
+                          <span>OFFLINE</span>
+                        </span>
+                      )}
                     </td>
-
+                    <td className="py-5 px-6 space-y-1">
+                      {currentUser.role === 'ADMIN' ? (
+                        <>
+                          <div className="text-cyan-400 font-semibold">{client.email}</div>
+                          <div className="text-slate-300">{client.phone}</div>
+                          <div className="text-[10px] text-slate-500">🌐 IP: {client.ip}</div>
+                        </>
+                      ) : (
+                        <div className="flex items-center text-slate-500 space-x-2 py-1">
+                          <EyeOff className="w-4 h-4 text-slate-600" />
+                          <span className="italic text-[11px]">Hidden by Administrator</span>
+                        </div>
+                      )}
+                    </td>
                     <td className="py-5 px-6">
                       <div className="font-bold text-emerald-400 text-sm">
                         ${(client.balanceUSD || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}
@@ -468,13 +512,12 @@ export default function AdminPortal() {
                         Bonus: ${(client.bonusUSD || 0).toFixed(2)}
                       </div>
                     </td>
-
                     <td className="py-5 px-6">
                       {currentUser.role === 'ADMIN' ? (
                         <select
                           value={client.assignedAgent || 'Unassigned'}
                           onChange={(e) => handleAssignAgent(client.id, e.target.value)}
-                          className="bg-slate-950 border border-slate-800 text-cyan-400 font-semibold rounded-lg px-2.5 py-1 text-xs focus:outline-none focus:border-cyan-500"
+                          className="bg-slate-950 border border-slate-800 text-cyan-400 font-semibold rounded-lg px-2.5 py-1 text-xs focus:outline-none focus:border-cyan-500 cursor-pointer"
                         >
                           {availableAgents.map(ag => (
                             <option key={ag} value={ag}>{ag}</option>
@@ -484,17 +527,6 @@ export default function AdminPortal() {
                         <span className="text-slate-300 font-semibold">{client.assignedAgent || 'Unassigned'}</span>
                       )}
                     </td>
-
-                    <td className="py-5 px-6">
-                      <span className={`px-2.5 py-1 text-[10px] font-bold rounded ${
-                        client.kycStatus === 'VERIFIED' ? 'bg-cyan-500/10 border border-cyan-500/30 text-cyan-400' :
-                        client.kycStatus === 'REJECTED' ? 'bg-slate-800 border border-slate-700 text-slate-400' :
-                        'bg-amber-500/10 border border-amber-500/30 text-amber-400'
-                      }`}>
-                        {client.kycStatus || 'PENDING'}
-                      </span>
-                    </td>
-
                     <td className="py-5 px-6 text-right">
                       <button 
                         onClick={() => startCall(client)}
@@ -511,46 +543,6 @@ export default function AdminPortal() {
           </div>
         )}
 
-        {activeCrmTab === 'kyc_queue' && currentUser.role === 'ADMIN' && (
-          <div className="bg-slate-900/40 border border-slate-800/80 rounded-2xl p-6 shadow-2xl backdrop-blur-md space-y-4">
-            {kycQueue.length === 0 ? (
-              <div className="text-center py-12 text-slate-500 font-mono text-xs border border-dashed border-slate-800 rounded-xl">
-                No pending identity verification submissions.
-              </div>
-            ) : (
-              kycQueue.map((item) => (
-                <div key={item.id} className="bg-slate-950/80 border border-slate-800 rounded-xl p-5 flex flex-wrap justify-between items-center gap-4 text-xs font-mono">
-                  <div className="space-y-1">
-                    <div className="flex items-center space-x-2">
-                      <span className="font-bold text-white text-sm">{item.name}</span>
-                      <span className="text-slate-500">({item.id})</span>
-                    </div>
-                    <div className="text-slate-400">
-                      Email: <span className="text-white">{item.email}</span> | Document: <span className="text-white">{item.docType} ({item.docId})</span>
-                    </div>
-                  </div>
-
-                  <div className="flex items-center space-x-2">
-                    <button 
-                      onClick={() => handleApproveKyc(item)}
-                      className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-xl transition flex items-center space-x-1 font-sans text-xs cursor-pointer"
-                    >
-                      <Check className="w-4 h-4" />
-                      <span>Approve & Register</span>
-                    </button>
-                    <button 
-                      onClick={() => handleRejectKyc(item.id)}
-                      className="px-3 py-2 bg-slate-900 hover:bg-slate-800 text-slate-400 border border-slate-800 rounded-xl transition cursor-pointer"
-                    >
-                      <X className="w-4 h-4" />
-                    </button>
-                  </div>
-                </div>
-              ))
-            )}
-          </div>
-        )}
-
         {activeCrmTab === 'financial_ops' && currentUser.role === 'ADMIN' && (
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
             <div className="lg:col-span-2 space-y-6">
@@ -559,31 +551,33 @@ export default function AdminPortal() {
                   <Clock className="w-4 h-4 text-cyan-400" />
                   <span>Pending Client Deposits & Withdrawals</span>
                 </h2>
-
-                {pendingTransactions.map((tx) => (
-                  <div key={tx.id} className="bg-slate-950/80 border border-slate-800 rounded-xl p-4 flex justify-between items-center text-xs font-mono">
-                    <div>
-                      <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${tx.type === 'DEPOSIT' ? 'bg-emerald-500/10 text-emerald-400' : 'bg-rose-500/10 text-rose-400'}`}>
-                        {tx.type}
-                      </span>
-                      <span className="font-bold text-white ml-2">{tx.clientName}</span>
-                      <div className="text-slate-300 mt-1">Amount: ${tx.amountUSD.toFixed(2)} USD</div>
+                {pendingTransactions.length === 0 ? (
+                  <div className="text-center py-6 text-slate-500 text-xs font-mono">No pending requests</div>
+                ) : (
+                  pendingTransactions.map((tx) => (
+                    <div key={tx.id} className="bg-slate-950/80 border border-slate-800 rounded-xl p-4 flex justify-between items-center text-xs font-mono">
+                      <div>
+                        <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${tx.type === 'DEPOSIT' ? 'bg-emerald-500/10 text-emerald-400' : 'bg-rose-500/10 text-rose-400'}`}>
+                          {tx.type}
+                        </span>
+                        <span className="font-bold text-white ml-2">{tx.clientName}</span>
+                        <div className="text-slate-300 mt-1">Amount: ${tx.amountUSD.toFixed(2)} USD</div>
+                      </div>
+                      <div className="flex space-x-2">
+                        <button onClick={() => handleApproveTransaction(tx)} className="px-3 py-1.5 bg-emerald-600 text-white rounded-lg font-sans font-bold cursor-pointer">Approve</button>
+                        <button onClick={() => handleRejectTransaction(tx)} className="px-3 py-1.5 bg-slate-900 text-slate-400 border border-slate-800 rounded-lg cursor-pointer">Reject</button>
+                      </div>
                     </div>
-                    <div className="flex space-x-2">
-                      <button onClick={() => handleApproveTransaction(tx)} className="px-3 py-1.5 bg-emerald-600 text-white rounded-lg font-sans font-bold cursor-pointer">Approve</button>
-                      <button onClick={() => handleRejectTransaction(tx)} className="px-3 py-1.5 bg-slate-900 text-slate-400 border border-slate-800 rounded-lg cursor-pointer">Reject</button>
-                    </div>
-                  </div>
-                ))}
+                  ))
+                )}
               </div>
             </div>
 
             <div className="bg-slate-900/40 border border-slate-800/80 rounded-2xl p-6 shadow-2xl backdrop-blur-md space-y-4">
               <h2 className="text-xs font-bold text-white uppercase font-mono tracking-wider flex items-center space-x-2 pb-2 border-b border-slate-800">
                 <DollarSign className="w-4 h-4 text-emerald-400" />
-                <span>Balance & Bonus Credit</span>
+                <span>Add / Deduct Balance & Bonus</span>
               </h2>
-
               <form onSubmit={handleManualBalanceAdjustment} className="space-y-4 text-xs font-mono">
                 <div>
                   <label className="block text-slate-400 uppercase text-[10px] mb-1">Target Account</label>
@@ -658,7 +652,6 @@ export default function AdminPortal() {
 
           <div className="space-y-1">
             <div className="text-sm font-bold text-white">{activeCallClient.name}</div>
-            <div className="text-xs text-cyan-400">{maskPhone(activeCallClient.phone)}</div>
             <div className="text-[10px] text-slate-500 uppercase">
               Status: <span className="text-amber-400 font-bold">{callStatus}</span>
             </div>

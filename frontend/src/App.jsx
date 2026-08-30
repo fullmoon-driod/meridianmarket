@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import AdminDashboard from './AdminDashboard';
+import AdminPortal from './AdminPortal';
 import LandingPage from './LandingPage';
 import TradingDashboard from './TradingDashboard';
 
@@ -29,9 +29,9 @@ function App() {
     };
   }, [currentPath]);
 
-  // 1. CRM Subdomain Route
+  // 1. CRM Subdomain Route -> Points to AdminPortal
   if (isCrmSubdomain) {
-    return <AdminDashboard />;
+    return <AdminPortal />;
   }
 
   // 2. Dashboard Route (triggers when URL contains /dashboard)
