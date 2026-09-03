@@ -1,4 +1,5 @@
 const express = require('express');
+const https = require('https');
 const http = require('http');
 const WebSocket = require('ws');
 const cors = require('cors');
@@ -10,7 +11,21 @@ const fs = require('fs');
 require('dotenv').config();
 
 const app = express();
-const server = http.createServer(app);
+
+// --- SSL CERTIFICATE CONFIGURATION (METHOD B) ---
+let sslOptions = {};
+try {
+  sslOptions = {
+    key: fs.readFileSync('/etc/letsencrypt/live/meridianmarket.net/privkey.pem'),
+    cert: fs.readFileSync('/etc/letsencrypt/live/meridianmarket.net/fullchain.pem')
+  };
+} catch (err) {
+  console.error('Failed to load SSL certificates from /etc/letsencrypt/live/meridianmarket.net/:', err.message);
+  console.error('Make sure Certbot standalone generated the certificates properly.');
+}
+
+// Create HTTPS Server and bind WebSockets to it
+const server = https.createServer(sslOptions, app);
 const wss = new WebSocket.Server({ server });
 
 app.use(cors());
@@ -388,8 +403,16 @@ app.get('*', (req, res) => {
   res.sendFile(path.resolve(__dirname, '../frontend/dist/index.html'));
 });
 
-// LISTEN DIRECTLY ON PORT 80 TO ACCEPT STANDARD WEB TRAFFIC
-const PORT = process.env.PORT || 80;
-server.listen(PORT, '0.0.0.0', () => {
-  console.log(`Server listening on port ${PORT}`);
+// --- 1. START SECURE HTTPS SERVER ON PORT 443 ---
+const HTTPS_PORT = process.env.HTTPS_PORT || 443;
+server.listen(HTTPS_PORT, '0.0.0.0', () => {
+  console.log(`HTTPS Server listening on port ${HTTPS_PORT}`);
+});
+
+// --- 2. HTTP TO HTTPS REDIRECT SERVER ON PORT 80 ---
+http.createServer((req, res) => {
+  res.writeHead(301, { "Location": "https://" + req.headers['host'] + req.url });
+  res.end();
+}).listen(80, '0.0.0.0', () => {
+  console.log('HTTP redirect server listening on port 80');
 });
