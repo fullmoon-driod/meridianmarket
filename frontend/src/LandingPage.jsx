@@ -20,8 +20,7 @@ import {
   Layers,
   Cpu,
   Download,
-  HelpCircle,
-  KeyRound
+  HelpCircle
 } from 'lucide-react';
 
 const COUNTRY_CODES = [
@@ -44,7 +43,6 @@ export default function LandingPage() {
   const navigate = useNavigate();
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [authMode, setAuthMode] = useState('register'); // 'register' | 'login'
-  const [step, setStep] = useState('details'); // 'details' | 'verify'
   const [activeTab, setActiveTab] = useState('forex');
   
   const [formData, setFormData] = useState({
@@ -53,10 +51,8 @@ export default function LandingPage() {
     countryCode: '+1',
     phone: '',
     password: '',
-    confirmPassword: '',
-    verificationCode: ''
+    confirmPassword: ''
   });
-
   const [errorMsg, setErrorMsg] = useState('');
 
   const handleAuthSubmit = (e) => {
@@ -64,46 +60,34 @@ export default function LandingPage() {
     setErrorMsg('');
     
     if (authMode === 'register') {
-      if (step === 'details') {
-        if (formData.password !== formData.confirmPassword) {
-          setErrorMsg('Passwords do not match.');
-          return;
-        }
-        // Move to email verification step
-        setStep('verify');
+      if (formData.password !== formData.confirmPassword) {
+        setErrorMsg('Passwords do not match.');
         return;
       }
+      
+      // Directly register user without OTP verification
+      const fullPhoneNumber = `${formData.countryCode} ${formData.phone}`;
+      const newClient = {
+        id: `CL-${Math.floor(1000 + Math.random() * 9000)}`,
+        name: formData.fullName || 'New Trader',
+        email: formData.email,
+        phone: fullPhoneNumber,
+        ip: '192.168.1.100',
+        kycStatus: 'UNVERIFIED',
+        balance: 0.00,
+        assignedAgent: 'Unassigned',
+        registeredAt: new Date().toISOString()
+      };
 
-      if (step === 'verify') {
-        if (!formData.verificationCode || formData.verificationCode.length < 4) {
-          setErrorMsg('Please enter a valid verification code.');
-          return;
-        }
-
-        const fullPhoneNumber = `${formData.countryCode} ${formData.phone}`;
-        const newClient = {
-          id: `CL-${Math.floor(1000 + Math.random() * 9000)}`,
-          name: formData.fullName || 'New Trader',
-          email: formData.email,
-          phone: fullPhoneNumber,
-          ip: '192.168.1.100',
-          kycStatus: 'UNVERIFIED',
-          balance: 0.00,
-          assignedAgent: 'Unassigned',
-          registeredAt: new Date().toISOString()
-        };
-
-        try {
-          const existingClients = JSON.parse(localStorage.getItem('crm_clients') || '[]');
-          localStorage.setItem('crm_clients', JSON.stringify([newClient, ...existingClients]));
-        } catch (err) {
-          console.error('Failed to sync registered user to CRM:', err);
-        }
+      try {
+        const existingClients = JSON.parse(localStorage.getItem('crm_clients') || '[]');
+        localStorage.setItem('crm_clients', JSON.stringify([newClient, ...existingClients]));
+      } catch (err) {
+        console.error('Failed to sync registered user to CRM:', err);
       }
     }
 
     setShowAuthModal(false);
-    setStep('details');
     
     try {
       navigate('/dashboard');
@@ -114,7 +98,6 @@ export default function LandingPage() {
 
   const openAuth = (mode) => {
     setAuthMode(mode);
-    setStep('details');
     setErrorMsg('');
     setShowAuthModal(true);
   };
@@ -523,12 +506,12 @@ export default function LandingPage() {
               <div>
                 <h3 className="text-lg font-bold text-slate-900">
                   {authMode === 'register' 
-                    ? (step === 'verify' ? 'Verify Email Address' : 'Create Live Trader Account') 
+                    ? 'Create Live Trader Account' 
                     : 'Sign In To Terminal'}
                 </h3>
                 <p className="text-xs text-slate-500">
                   {authMode === 'register'
-                    ? (step === 'verify' ? `Enter verification code sent to ${formData.email}` : 'Register to access the Meridian trading terminal')
+                    ? 'Register to access the Meridian trading terminal'
                     : 'Enter your credentials to continue'}
                 </p>
               </div>
@@ -548,7 +531,7 @@ export default function LandingPage() {
             )}
 
             <form onSubmit={handleAuthSubmit} className="space-y-4">
-              {authMode === 'register' && step === 'details' && (
+              {authMode === 'register' && (
                 <>
                   <div>
                     <label className="block text-[11px] font-bold text-slate-600 uppercase mb-1">Full Legal Name</label>
@@ -620,34 +603,6 @@ export default function LandingPage() {
                   </div>
                 </>
               )}
-
-              {authMode === 'register' && step === 'verify' && (
-                <div className="py-2">
-                  <div className="p-4 bg-amber-50 border border-amber-200 rounded-xl mb-4 text-center">
-                    <KeyRound className="w-8 h-8 text-amber-600 mx-auto mb-2" />
-                    <p className="text-xs text-slate-600 mb-1">Verification Code Sent</p>
-                    <p className="text-[11px] font-semibold text-slate-800">{formData.email}</p>
-                  </div>
-                  <label className="block text-[11px] font-bold text-slate-600 uppercase mb-1 text-center">Enter 6-Digit Code</label>
-                  <input 
-                    type="text" 
-                    required
-                    maxLength={6}
-                    placeholder="123456"
-                    value={formData.verificationCode}
-                    onChange={(e) => setFormData({...formData, verificationCode: e.target.value})}
-                    className="w-full bg-amber-50/40 border border-slate-300 rounded-xl px-3.5 py-3 text-center text-lg tracking-widest font-mono text-slate-900 focus:outline-none focus:border-amber-500 focus:bg-white"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setStep('details')}
-                    className="w-full text-center text-[11px] text-amber-700 font-semibold hover:underline mt-2"
-                  >
-                    Edit Registration Details
-                  </button>
-                </div>
-              )}
-
               {authMode === 'login' && (
                 <>
                   <div>
@@ -658,7 +613,7 @@ export default function LandingPage() {
                       placeholder="trader@meridian.com"
                       value={formData.email}
                       onChange={(e) => setFormData({...formData, email: e.target.value})}
-                      className="w-full bg-amber-50/40 border border-slate-300 rounded-xl px-3.5 py-2.5 text-xs text-slate-900 focus:outline-none focus:border-amber-500 focus:bg-white"
+                      className="w-full bg-amber-50/40 border border-slate-300 rounded-xl px-3.5 py-2.5 text-xs text-slate-900 focus:outline-none focus:border-amber-500 focus:bg-white font-mono"
                     />
                   </div>
                   <div>
@@ -669,19 +624,16 @@ export default function LandingPage() {
                       placeholder="••••••••••••"
                       value={formData.password}
                       onChange={(e) => setFormData({...formData, password: e.target.value})}
-                      className="w-full bg-amber-50/40 border border-slate-300 rounded-xl px-3.5 py-2.5 text-xs text-slate-900 focus:outline-none focus:border-amber-500 focus:bg-white"
+                      className="w-full bg-amber-50/40 border border-slate-300 rounded-xl px-3.5 py-2.5 text-xs text-slate-900 focus:outline-none focus:border-amber-500 focus:bg-white font-mono"
                     />
                   </div>
                 </>
               )}
-
               <button
                 type="submit"
                 className="w-full py-3 bg-amber-500 hover:bg-amber-600 text-white font-extrabold text-xs rounded-xl transition mt-2 shadow-md shadow-amber-500/20"
               >
-                {authMode === 'register' 
-                  ? (step === 'verify' ? 'Confirm Verification & Register' : 'Continue to Email Verification') 
-                  : 'Sign In'}
+                {authMode === 'register' ? 'Register & Enter Terminal' : 'Sign In'}
               </button>
             </form>
           </div>

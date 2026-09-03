@@ -6,6 +6,9 @@ const sqlite3 = require('sqlite3').verbose();
 const path = require('path');
 const fs = require('fs');
 
+// Load environment variables (.env)
+require('dotenv').config();
+
 const app = express();
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
@@ -101,6 +104,7 @@ function logClientActivity(clientId, actionType, details = {}) {
 
 // --- AUTHENTICATION ENDPOINTS ---
 
+// REGISTER USER (DIRECT REGISTRATION)
 app.post('/api/register', (req, res) => {
   const { fullName, email, phone, password } = req.body;
 
@@ -108,13 +112,15 @@ app.post('/api/register', (req, res) => {
     return res.status(400).json({ error: 'All fields are required.' });
   }
 
+  const normalizedEmail = email.toLowerCase();
+
   // Find default agent safely
   db.get(`SELECT id FROM crm_agents ORDER BY id ASC LIMIT 1`, [], (err, agentRow) => {
     const defaultAgentId = agentRow ? agentRow.id : null;
 
     db.run(
       `INSERT INTO clients (full_name, email, phone, password, agent_id) VALUES (?, ?, ?, ?, ?)`,
-      [fullName, email, phone, password, defaultAgentId],
+      [fullName, normalizedEmail, phone, password, defaultAgentId],
       function (dbErr) {
         if (dbErr) {
           console.error('Registration Error:', dbErr.message);
@@ -126,11 +132,11 @@ app.post('/api/register', (req, res) => {
         }
 
         const newClientId = this.lastID;
-        logClientActivity(newClientId, 'ACCOUNT_CREATED', { fullName, email, phone });
+        logClientActivity(newClientId, 'ACCOUNT_CREATED', { fullName, email: normalizedEmail, phone });
 
         return res.json({
           success: true,
-          client: { id: newClientId, full_name: fullName, email, phone, agent_id: defaultAgentId }
+          client: { id: newClientId, full_name: fullName, email: normalizedEmail, phone, agent_id: defaultAgentId }
         });
       }
     );
@@ -141,7 +147,7 @@ app.post('/api/login', (req, res) => {
   const { email, password } = req.body;
   db.get(
     `SELECT id, full_name, email, phone, agent_id FROM clients WHERE email = ? AND password = ?`,
-    [email, password],
+    [email.toLowerCase(), password],
     (err, client) => {
       if (err || !client) {
         return res.status(401).json({ error: 'Invalid email or password.' });
@@ -198,7 +204,7 @@ app.delete('/api/admin/clients/:id', (req, res) => {
 
 app.post('/api/crm/agent/login', (req, res) => {
   const { email, password } = req.body;
-  db.get(`SELECT id, name, email, role FROM crm_agents WHERE email = ? AND password = ?`, [email, password], (err, agent) => {
+  db.get(`SELECT id, name, email, role FROM crm_agents WHERE email = ? AND password = ?`, [email.toLowerCase(), password], (err, agent) => {
     if (err || !agent) {
       return res.status(401).json({ error: 'Invalid agent credentials.' });
     }
