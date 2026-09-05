@@ -138,7 +138,7 @@ export default function AdminPortal() {
   }, [clients, searchQuery, currentUser]);
 
   // -------------------------------------------------------------
-  // 4. NOTIFICATIONS & FINANCIAL TRANSACTIONS
+  // 4. NOTIFICATIONS, FINANCIAL TRANSACTIONS & KYC MANAGEMENT
   // -------------------------------------------------------------
   const [notifications, setNotifications] = useState([
     {
@@ -201,6 +201,15 @@ export default function AdminPortal() {
     setClients(clients.map(c => c.id === clientId ? { ...c, assignedAgent: newAgent } : c));
   };
 
+  const handleUpdateKycStatus = (clientId, newStatus) => {
+    setClients(clients.map(client => {
+      if (client.id === clientId) {
+        return { ...client, kycStatus: newStatus };
+      }
+      return client;
+    }));
+  };
+
   const handleApproveTransaction = (tx) => {
     setClients(clients.map(client => {
       if (client.id === tx.clientId) {
@@ -261,16 +270,19 @@ export default function AdminPortal() {
     if (!newNote.trim() || !activeCallClient) return;
 
     const noteText = `[${new Date().toLocaleTimeString()}] (${currentUser.name}): ${newNote}`;
+    
     setClients(clients.map(c => {
       if (c.id === activeCallClient.id) {
         return { ...c, callNotes: [noteText, ...(c.callNotes || [])] };
       }
       return c;
     }));
+
     setActiveCallClient({
       ...activeCallClient,
       callNotes: [noteText, ...(activeCallClient.callNotes || [])]
     });
+
     setNewNote('');
   };
 
@@ -295,6 +307,7 @@ export default function AdminPortal() {
                 {loginError}
               </div>
             )}
+
             <div>
               <label className="block text-slate-400 uppercase mb-1">Email Terminal ID</label>
               <input 
@@ -383,6 +396,7 @@ export default function AdminPortal() {
                     Clear Badges
                   </button>
                 </div>
+
                 <div className="space-y-2 max-h-60 overflow-y-auto">
                   {notifications.length === 0 ? (
                     <p className="text-slate-500 text-center py-2">No active notifications</p>
@@ -430,6 +444,7 @@ export default function AdminPortal() {
               <Users className="w-4 h-4" />
               <span>{currentUser.role === 'ADMIN' ? 'All Clients' : 'My Assigned Clients'} ({visibleClients.length})</span>
             </button>
+
             {currentUser.role === 'ADMIN' && (
               <button
                 onClick={() => setActiveCrmTab('financial_ops')}
@@ -591,7 +606,6 @@ export default function AdminPortal() {
                     ))}
                   </select>
                 </div>
-
                 <div className="grid grid-cols-3 gap-1">
                   <button 
                     type="button" 
@@ -615,7 +629,6 @@ export default function AdminPortal() {
                     + Bonus
                   </button>
                 </div>
-
                 <div>
                   <label className="block text-slate-400 uppercase text-[10px] mb-1">Amount (USD)</label>
                   <input 
@@ -627,7 +640,6 @@ export default function AdminPortal() {
                     className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white"
                   />
                 </div>
-
                 <button type="submit" className="w-full py-3 bg-cyan-500 text-slate-950 font-bold rounded-xl font-sans uppercase cursor-pointer">
                   Execute Order
                 </button>
@@ -649,14 +661,12 @@ export default function AdminPortal() {
               <X className="w-4 h-4" />
             </button>
           </div>
-
           <div className="space-y-1">
             <div className="text-sm font-bold text-white">{activeCallClient.name}</div>
             <div className="text-[10px] text-slate-500 uppercase">
               Status: <span className="text-amber-400 font-bold">{callStatus}</span>
             </div>
           </div>
-
           <div className="space-y-2">
             <label className="block text-[10px] uppercase text-slate-400">Interaction Log</label>
             <div className="max-h-28 overflow-y-auto bg-slate-900 border border-slate-800 rounded-xl p-2.5 space-y-1.5 text-[11px] text-slate-300">
@@ -669,7 +679,6 @@ export default function AdminPortal() {
               )}
             </div>
           </div>
-
           <form onSubmit={handleAddCallNote} className="space-y-2">
             <input 
               type="text" 

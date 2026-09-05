@@ -54,45 +54,75 @@ export default function LandingPage() {
     confirmPassword: ''
   });
   const [errorMsg, setErrorMsg] = useState('');
+  const [loading, setLoading] = useState(false);
 
-  const handleAuthSubmit = (e) => {
+  // STEP 3: CONNECT FRONTEND AUTHENTICATION TO EXPRESS BACKEND API
+  const handleAuthSubmit = async (e) => {
     e.preventDefault();
     setErrorMsg('');
-    
-    if (authMode === 'register') {
-      if (formData.password !== formData.confirmPassword) {
-        setErrorMsg('Passwords do not match.');
-        return;
+    setLoading(true);
+
+    const fullPhoneNumber = `${formData.countryCode} ${formData.phone}`;
+
+    try {
+      if (authMode === 'register') {
+        if (formData.password !== formData.confirmPassword) {
+          setErrorMsg('Passwords do not match.');
+          setLoading(false);
+          return;
+        }
+
+        const response = await fetch('/api/register', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            fullName: formData.fullName,
+            email: formData.email,
+            phone: fullPhoneNumber,
+            password: formData.password
+          })
+        });
+
+        const data = await response.json();
+
+        if (!response.ok || !data.success) {
+          throw new Error(data.error || 'Registration failed. Please try again.');
+        }
+
+        // Store active client credentials locally
+        localStorage.setItem('current_user', JSON.stringify(data.client));
+      } else {
+        // LOGIN MODE
+        const response = await fetch('/api/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            email: formData.email,
+            password: formData.password
+          })
+        });
+
+        const data = await response.json();
+
+        if (!response.ok || !data.success) {
+          throw new Error(data.error || 'Invalid email or password.');
+        }
+
+        // Store active client credentials locally
+        localStorage.setItem('current_user', JSON.stringify(data.client));
       }
-      
-      // Directly register user without OTP verification
-      const fullPhoneNumber = `${formData.countryCode} ${formData.phone}`;
-      const newClient = {
-        id: `CL-${Math.floor(1000 + Math.random() * 9000)}`,
-        name: formData.fullName || 'New Trader',
-        email: formData.email,
-        phone: fullPhoneNumber,
-        ip: '192.168.1.100',
-        kycStatus: 'UNVERIFIED',
-        balance: 0.00,
-        assignedAgent: 'Unassigned',
-        registeredAt: new Date().toISOString()
-      };
+
+      setShowAuthModal(false);
+      setLoading(false);
 
       try {
-        const existingClients = JSON.parse(localStorage.getItem('crm_clients') || '[]');
-        localStorage.setItem('crm_clients', JSON.stringify([newClient, ...existingClients]));
+        navigate('/dashboard');
       } catch (err) {
-        console.error('Failed to sync registered user to CRM:', err);
+        window.location.pathname = '/dashboard';
       }
-    }
-
-    setShowAuthModal(false);
-    
-    try {
-      navigate('/dashboard');
     } catch (err) {
-      window.location.pathname = '/dashboard';
+      setErrorMsg(err.message || 'Server network error.');
+      setLoading(false);
     }
   };
 
@@ -135,7 +165,6 @@ export default function LandingPage() {
               <span className="text-[10px] text-amber-600 font-mono tracking-widest uppercase font-bold">Markets</span>
             </div>
           </div>
-
           <nav className="hidden lg:flex items-center space-x-8 text-xs font-semibold text-slate-600">
             <a href="#markets" className="hover:text-amber-600 transition">Markets</a>
             <a href="#accounts" className="hover:text-amber-600 transition">Account Types</a>
@@ -143,7 +172,6 @@ export default function LandingPage() {
             <a href="#security" className="hover:text-amber-600 transition">Fund Security</a>
             <a href="#institutional" className="hover:text-amber-600 transition">Institutional Desk</a>
           </nav>
-
           <div className="flex items-center space-x-3">
             <button 
               type="button"
@@ -172,15 +200,12 @@ export default function LandingPage() {
             <Zap className="w-3.5 h-3.5 text-amber-600 fill-amber-500" />
             <span>Institutional ECN Liquidity & Sub-12ms Execution</span>
           </div>
-
           <h1 className="text-4xl sm:text-5xl md:text-7xl font-black text-slate-900 tracking-tight leading-tight mb-6 max-w-5xl">
             Trade Forex & Global Assets with <span className="text-transparent bg-clip-text bg-gradient-to-r from-amber-600 to-orange-600">Ultra-Raw Spreads</span>
           </h1>
-
           <p className="text-slate-600 max-w-2xl text-sm md:text-base mb-10 leading-relaxed">
             Access 120+ FX pairs, metals, indices, and crypto with up to 1:500 leverage, zero slippage infrastructure, and direct Web3/crypto wallet deposits.
           </p>
-
           <div className="flex flex-col sm:flex-row items-center justify-center space-y-4 sm:space-y-0 sm:space-x-4 w-full max-w-md mb-16">
             <button 
               type="button"
@@ -377,7 +402,6 @@ export default function LandingPage() {
                 <li className="flex items-center space-x-2"><CheckCircle2 className="w-4 h-4 text-amber-500" /> <span>Instant Web3 Deposits</span></li>
               </ul>
             </div>
-
             <button 
               onClick={() => openAuth('register')}
               className="w-full py-3 bg-slate-100 hover:bg-amber-100/60 text-slate-800 font-bold text-xs rounded-xl transition border border-slate-200"
@@ -391,7 +415,6 @@ export default function LandingPage() {
             <div className="absolute -top-3.5 left-1/2 -translate-x-1/2 bg-amber-500 text-white text-[10px] font-black uppercase tracking-widest px-3 py-1 rounded-full shadow-sm">
               Most Popular
             </div>
-
             <div>
               <div className="text-xs font-mono font-bold text-amber-700 uppercase tracking-widest mb-2">Scalpers & Algorithmic</div>
               <h3 className="text-2xl font-bold text-slate-900 mb-2">Raw ECN Suite</h3>
@@ -406,7 +429,6 @@ export default function LandingPage() {
                 <li className="flex items-center space-x-2"><CheckCircle2 className="w-4 h-4 text-amber-600" /> <span>Full EA & Algo Support</span></li>
               </ul>
             </div>
-
             <button 
               onClick={() => openAuth('register')}
               className="w-full py-3.5 bg-amber-500 hover:bg-amber-600 text-white font-extrabold text-xs rounded-xl transition shadow-md shadow-amber-500/20"
@@ -431,7 +453,6 @@ export default function LandingPage() {
                 <li className="flex items-center space-x-2"><CheckCircle2 className="w-4 h-4 text-amber-500" /> <span>Priority Withdrawal Queue</span></li>
               </ul>
             </div>
-
             <button 
               onClick={() => openAuth('register')}
               className="w-full py-3 bg-slate-100 hover:bg-amber-100/60 text-slate-800 font-bold text-xs rounded-xl transition border border-slate-200"
@@ -457,7 +478,6 @@ export default function LandingPage() {
             <h3 className="text-base font-bold text-slate-900 mb-2">Real-Time Terminal Execution</h3>
             <p className="text-xs text-slate-500 leading-relaxed">Live floating PnL, margin alerts, and single-click position closure built directly into our web terminal.</p>
           </div>
-
           <div className="p-6 bg-white border border-amber-200/70 rounded-2xl shadow-sm hover:border-amber-400 transition">
             <div className="p-3 bg-amber-500/10 border border-amber-500/20 rounded-xl w-fit mb-4">
               <Globe className="w-6 h-6 text-amber-600" />
@@ -465,7 +485,6 @@ export default function LandingPage() {
             <h3 className="text-base font-bold text-slate-900 mb-2">Regional Wallet Integrations</h3>
             <p className="text-xs text-slate-500 leading-relaxed">Instant deposit gateways with Coins.ph, Luno, Binance Pay, and direct USDT TRC-20 support.</p>
           </div>
-
           <div className="p-6 bg-white border border-amber-200/70 rounded-2xl shadow-sm hover:border-amber-400 transition">
             <div className="p-3 bg-amber-500/10 border border-amber-500/20 rounded-xl w-fit mb-4">
               <Lock className="w-6 h-6 text-amber-600" />
@@ -488,7 +507,6 @@ export default function LandingPage() {
               Global multi-asset brokerage offering raw liquidity, institutional ECN execution, and instant digital settlements.
             </p>
           </div>
-
           <div>
             <h4 className="font-bold text-white uppercase tracking-wider text-[11px] mb-4">Navigation</h4>
             <ul className="space-y-2.5 text-[11px] text-amber-200/70">
@@ -497,7 +515,6 @@ export default function LandingPage() {
               <li><a href="#features" className="hover:text-amber-400 transition">Trading Platform</a></li>
             </ul>
           </div>
-
           <div>
             <h4 className="font-bold text-white uppercase tracking-wider text-[11px] mb-4">Supported Gateways</h4>
             <ul className="space-y-2.5 text-[11px] text-amber-200/60">
@@ -506,7 +523,6 @@ export default function LandingPage() {
               <li>Binance Pay (USDT / TRC-20)</li>
             </ul>
           </div>
-
           <div>
             <h4 className="font-bold text-white uppercase tracking-wider text-[11px] mb-4">Institutional Support</h4>
             <div className="space-y-2.5 text-[11px] text-amber-200/70">
@@ -515,7 +531,6 @@ export default function LandingPage() {
             </div>
           </div>
         </div>
-
         <div className="max-w-7xl mx-auto px-6 pt-8 border-t border-amber-900/60 text-center text-[10px] text-amber-300/50 leading-relaxed">
           Risk Warning: Trading Forex, CFDs, and digital assets involves high risk to your capital. You should only trade money you can afford to lose. © 2026 Meridian Markets Ltd.
         </div>
@@ -568,7 +583,6 @@ export default function LandingPage() {
                       className="w-full bg-amber-50/40 border border-slate-300 rounded-xl px-3.5 py-2.5 text-xs text-slate-900 focus:outline-none focus:border-amber-500 focus:bg-white"
                     />
                   </div>
-
                   <div>
                     <label className="block text-[11px] font-bold text-slate-600 uppercase mb-1">Email Address</label>
                     <input 
@@ -580,7 +594,6 @@ export default function LandingPage() {
                       className="w-full bg-amber-50/40 border border-slate-300 rounded-xl px-3.5 py-2.5 text-xs text-slate-900 focus:outline-none focus:border-amber-500 focus:bg-white"
                     />
                   </div>
-
                   <div>
                     <label className="block text-[11px] font-bold text-slate-600 uppercase mb-1">Phone Number</label>
                     <div className="flex space-x-2">
@@ -605,7 +618,6 @@ export default function LandingPage() {
                       />
                     </div>
                   </div>
-
                   <div>
                     <label className="block text-[11px] font-bold text-slate-600 uppercase mb-1">Password</label>
                     <input 
@@ -617,7 +629,6 @@ export default function LandingPage() {
                       className="w-full bg-amber-50/40 border border-slate-300 rounded-xl px-3.5 py-2.5 text-xs text-slate-900 focus:outline-none focus:border-amber-500 focus:bg-white"
                     />
                   </div>
-
                   <div>
                     <label className="block text-[11px] font-bold text-slate-600 uppercase mb-1">Confirm Password</label>
                     <input 
@@ -631,7 +642,6 @@ export default function LandingPage() {
                   </div>
                 </>
               )}
-
               {authMode === 'login' && (
                 <>
                   <div>
@@ -645,7 +655,6 @@ export default function LandingPage() {
                       className="w-full bg-amber-50/40 border border-slate-300 rounded-xl px-3.5 py-2.5 text-xs text-slate-900 focus:outline-none focus:border-amber-500 focus:bg-white font-mono"
                     />
                   </div>
-
                   <div>
                     <label className="block text-[11px] font-bold text-slate-600 uppercase mb-1">Password</label>
                     <input 
@@ -659,12 +668,16 @@ export default function LandingPage() {
                   </div>
                 </>
               )}
-
               <button
                 type="submit"
-                className="w-full py-3 bg-amber-500 hover:bg-amber-600 text-white font-extrabold text-xs rounded-xl transition mt-2 shadow-md shadow-amber-500/20"
+                disabled={loading}
+                className="w-full py-3 bg-amber-500 hover:bg-amber-600 disabled:bg-amber-300 text-white font-extrabold text-xs rounded-xl transition mt-2 shadow-md shadow-amber-500/20"
               >
-                {authMode === 'register' ? 'Register & Enter Terminal' : 'Sign In'}
+                {loading 
+                  ? 'Processing...' 
+                  : authMode === 'register' 
+                    ? 'Register & Enter Terminal' 
+                    : 'Sign In'}
               </button>
             </form>
           </div>
