@@ -135,6 +135,7 @@ export default function LandingPage() {
               <span className="text-[10px] text-amber-600 font-mono tracking-widest uppercase font-bold">Markets</span>
             </div>
           </div>
+
           <nav className="hidden lg:flex items-center space-x-8 text-xs font-semibold text-slate-600">
             <a href="#markets" className="hover:text-amber-600 transition">Markets</a>
             <a href="#accounts" className="hover:text-amber-600 transition">Account Types</a>
@@ -142,6 +143,7 @@ export default function LandingPage() {
             <a href="#security" className="hover:text-amber-600 transition">Fund Security</a>
             <a href="#institutional" className="hover:text-amber-600 transition">Institutional Desk</a>
           </nav>
+
           <div className="flex items-center space-x-3">
             <button 
               type="button"
@@ -170,12 +172,15 @@ export default function LandingPage() {
             <Zap className="w-3.5 h-3.5 text-amber-600 fill-amber-500" />
             <span>Institutional ECN Liquidity & Sub-12ms Execution</span>
           </div>
+
           <h1 className="text-4xl sm:text-5xl md:text-7xl font-black text-slate-900 tracking-tight leading-tight mb-6 max-w-5xl">
             Trade Forex & Global Assets with <span className="text-transparent bg-clip-text bg-gradient-to-r from-amber-600 to-orange-600">Ultra-Raw Spreads</span>
           </h1>
+
           <p className="text-slate-600 max-w-2xl text-sm md:text-base mb-10 leading-relaxed">
             Access 120+ FX pairs, metals, indices, and crypto with up to 1:500 leverage, zero slippage infrastructure, and direct Web3/crypto wallet deposits.
           </p>
+
           <div className="flex flex-col sm:flex-row items-center justify-center space-y-4 sm:space-y-0 sm:space-x-4 w-full max-w-md mb-16">
             <button 
               type="button"
@@ -193,7 +198,7 @@ export default function LandingPage() {
               <span>Start Trading</span>
             </button>
           </div>
-          
+
           {/* STATS STRIP */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4 w-full max-w-5xl pt-10 border-t border-amber-200/60">
             <div className="p-5 bg-white rounded-2xl border border-amber-100 shadow-sm">
@@ -223,6 +228,7 @@ export default function LandingPage() {
             <h2 className="text-2xl md:text-3xl font-extrabold text-slate-900 mb-2">Institutional Market Rates</h2>
             <p className="text-xs md:text-sm text-slate-500">Direct execution prices aggregated across Tier-1 liquidity providers.</p>
           </div>
+          
           <div className="flex bg-amber-100/60 p-1 rounded-xl border border-amber-200 mt-4 md:mt-0 text-xs font-semibold">
             {['forex', 'crypto', 'commodities'].map((tab) => (
               <button
@@ -238,6 +244,7 @@ export default function LandingPage() {
             ))}
           </div>
         </div>
+
         <div className="bg-white border border-amber-200/80 rounded-2xl overflow-hidden shadow-sm">
           <table className="w-full text-left border-collapse text-xs">
             <thead>
@@ -352,6 +359,7 @@ export default function LandingPage() {
           <h2 className="text-2xl md:text-4xl font-extrabold text-slate-900 mb-3">Tailored Account Tiers</h2>
           <p className="text-xs md:text-sm text-slate-500 max-w-xl mx-auto">Select the execution model that fits your volume and leverage strategy.</p>
         </div>
+
         <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
           {/* STANDARD */}
           <div className="bg-white border border-amber-200/80 p-8 rounded-2xl flex flex-col justify-between hover:shadow-md transition">
@@ -361,6 +369,7 @@ export default function LandingPage() {
               <p className="text-xs text-slate-500 leading-relaxed mb-6">Zero commission account with low spreads designed for discretionary traders.</p>
               
               <div className="text-3xl font-black text-slate-900 font-mono mb-6">$100 <span className="text-xs font-normal text-slate-400">min deposit</span></div>
+
               <ul className="space-y-3 text-xs text-slate-600 mb-8 border-t border-amber-100 pt-6">
                 <li className="flex items-center space-x-2"><CheckCircle2 className="w-4 h-4 text-amber-500" /> <span>Spreads from 1.0 pips</span></li>
                 <li className="flex items-center space-x-2"><CheckCircle2 className="w-4 h-4 text-amber-500" /> <span>$0 Commission</span></li>
@@ -368,6 +377,7 @@ export default function LandingPage() {
                 <li className="flex items-center space-x-2"><CheckCircle2 className="w-4 h-4 text-amber-500" /> <span>Instant Web3 Deposits</span></li>
               </ul>
             </div>
+
             <button 
               onClick={() => openAuth('register')}
               className="w-full py-3 bg-slate-100 hover:bg-amber-100/60 text-slate-800 font-bold text-xs rounded-xl transition border border-slate-200"
@@ -375,17 +385,20 @@ export default function LandingPage() {
               Select Standard
             </button>
           </div>
+
           {/* RAW SPREAD (FEATURED) */}
           <div className="bg-gradient-to-b from-amber-50/70 to-white border-2 border-amber-500 p-8 rounded-2xl flex flex-col justify-between relative shadow-xl shadow-amber-500/10">
             <div className="absolute -top-3.5 left-1/2 -translate-x-1/2 bg-amber-500 text-white text-[10px] font-black uppercase tracking-widest px-3 py-1 rounded-full shadow-sm">
               Most Popular
             </div>
+
             <div>
               <div className="text-xs font-mono font-bold text-amber-700 uppercase tracking-widest mb-2">Scalpers & Algorithmic</div>
               <h3 className="text-2xl font-bold text-slate-900 mb-2">Raw ECN Suite</h3>
               <p className="text-xs text-slate-600 leading-relaxed mb-6">Direct liquidity feeds with 0.0 pip spreads for high-frequency strategies.</p>
               
               <div className="text-3xl font-black text-slate-900 font-mono mb-6">$500 <span className="text-xs font-normal text-slate-400">min deposit</span></div>
+
               <ul className="space-y-3 text-xs text-slate-700 mb-8 border-t border-amber-200/80 pt-6">
                 <li className="flex items-center space-x-2"><CheckCircle2 className="w-4 h-4 text-amber-600" /> <span>Raw spreads from 0.0 pips</span></li>
                 <li className="flex items-center space-x-2"><CheckCircle2 className="w-4 h-4 text-amber-600" /> <span>$3.50 per lot commission</span></li>
@@ -393,6 +406,7 @@ export default function LandingPage() {
                 <li className="flex items-center space-x-2"><CheckCircle2 className="w-4 h-4 text-amber-600" /> <span>Full EA & Algo Support</span></li>
               </ul>
             </div>
+
             <button 
               onClick={() => openAuth('register')}
               className="w-full py-3.5 bg-amber-500 hover:bg-amber-600 text-white font-extrabold text-xs rounded-xl transition shadow-md shadow-amber-500/20"
@@ -400,6 +414,7 @@ export default function LandingPage() {
               Open Raw ECN Account
             </button>
           </div>
+
           {/* INSTITUTIONAL */}
           <div className="bg-white border border-amber-200/80 p-8 rounded-2xl flex flex-col justify-between hover:shadow-md transition">
             <div>
@@ -408,6 +423,7 @@ export default function LandingPage() {
               <p className="text-xs text-slate-500 leading-relaxed mb-6">Custom liquidity pools, dedicated account manager, and API access.</p>
               
               <div className="text-3xl font-black text-slate-900 font-mono mb-6">$10,000 <span className="text-xs font-normal text-slate-400">min deposit</span></div>
+
               <ul className="space-y-3 text-xs text-slate-600 mb-8 border-t border-amber-100 pt-6">
                 <li className="flex items-center space-x-2"><CheckCircle2 className="w-4 h-4 text-amber-500" /> <span>0.0 Pip spreads + Reduced fees</span></li>
                 <li className="flex items-center space-x-2"><CheckCircle2 className="w-4 h-4 text-amber-500" /> <span>FIX API Access</span></li>
@@ -415,6 +431,7 @@ export default function LandingPage() {
                 <li className="flex items-center space-x-2"><CheckCircle2 className="w-4 h-4 text-amber-500" /> <span>Priority Withdrawal Queue</span></li>
               </ul>
             </div>
+
             <button 
               onClick={() => openAuth('register')}
               className="w-full py-3 bg-slate-100 hover:bg-amber-100/60 text-slate-800 font-bold text-xs rounded-xl transition border border-slate-200"
@@ -431,6 +448,7 @@ export default function LandingPage() {
           <h2 className="text-2xl md:text-3xl font-extrabold text-slate-900 mb-3">Institutional Infrastructure</h2>
           <p className="text-xs md:text-sm text-slate-500 max-w-xl mx-auto">Built from the ground up for active traders who require low latency and precision execution.</p>
         </div>
+
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
           <div className="p-6 bg-white border border-amber-200/70 rounded-2xl shadow-sm hover:border-amber-400 transition">
             <div className="p-3 bg-amber-500/10 border border-amber-500/20 rounded-xl w-fit mb-4">
@@ -439,6 +457,7 @@ export default function LandingPage() {
             <h3 className="text-base font-bold text-slate-900 mb-2">Real-Time Terminal Execution</h3>
             <p className="text-xs text-slate-500 leading-relaxed">Live floating PnL, margin alerts, and single-click position closure built directly into our web terminal.</p>
           </div>
+
           <div className="p-6 bg-white border border-amber-200/70 rounded-2xl shadow-sm hover:border-amber-400 transition">
             <div className="p-3 bg-amber-500/10 border border-amber-500/20 rounded-xl w-fit mb-4">
               <Globe className="w-6 h-6 text-amber-600" />
@@ -446,6 +465,7 @@ export default function LandingPage() {
             <h3 className="text-base font-bold text-slate-900 mb-2">Regional Wallet Integrations</h3>
             <p className="text-xs text-slate-500 leading-relaxed">Instant deposit gateways with Coins.ph, Luno, Binance Pay, and direct USDT TRC-20 support.</p>
           </div>
+
           <div className="p-6 bg-white border border-amber-200/70 rounded-2xl shadow-sm hover:border-amber-400 transition">
             <div className="p-3 bg-amber-500/10 border border-amber-500/20 rounded-xl w-fit mb-4">
               <Lock className="w-6 h-6 text-amber-600" />
@@ -468,6 +488,7 @@ export default function LandingPage() {
               Global multi-asset brokerage offering raw liquidity, institutional ECN execution, and instant digital settlements.
             </p>
           </div>
+
           <div>
             <h4 className="font-bold text-white uppercase tracking-wider text-[11px] mb-4">Navigation</h4>
             <ul className="space-y-2.5 text-[11px] text-amber-200/70">
@@ -476,6 +497,7 @@ export default function LandingPage() {
               <li><a href="#features" className="hover:text-amber-400 transition">Trading Platform</a></li>
             </ul>
           </div>
+
           <div>
             <h4 className="font-bold text-white uppercase tracking-wider text-[11px] mb-4">Supported Gateways</h4>
             <ul className="space-y-2.5 text-[11px] text-amber-200/60">
@@ -484,6 +506,7 @@ export default function LandingPage() {
               <li>Binance Pay (USDT / TRC-20)</li>
             </ul>
           </div>
+
           <div>
             <h4 className="font-bold text-white uppercase tracking-wider text-[11px] mb-4">Institutional Support</h4>
             <div className="space-y-2.5 text-[11px] text-amber-200/70">
@@ -492,6 +515,7 @@ export default function LandingPage() {
             </div>
           </div>
         </div>
+
         <div className="max-w-7xl mx-auto px-6 pt-8 border-t border-amber-900/60 text-center text-[10px] text-amber-300/50 leading-relaxed">
           Risk Warning: Trading Forex, CFDs, and digital assets involves high risk to your capital. You should only trade money you can afford to lose. © 2026 Meridian Markets Ltd.
         </div>
@@ -544,6 +568,7 @@ export default function LandingPage() {
                       className="w-full bg-amber-50/40 border border-slate-300 rounded-xl px-3.5 py-2.5 text-xs text-slate-900 focus:outline-none focus:border-amber-500 focus:bg-white"
                     />
                   </div>
+
                   <div>
                     <label className="block text-[11px] font-bold text-slate-600 uppercase mb-1">Email Address</label>
                     <input 
@@ -555,6 +580,7 @@ export default function LandingPage() {
                       className="w-full bg-amber-50/40 border border-slate-300 rounded-xl px-3.5 py-2.5 text-xs text-slate-900 focus:outline-none focus:border-amber-500 focus:bg-white"
                     />
                   </div>
+
                   <div>
                     <label className="block text-[11px] font-bold text-slate-600 uppercase mb-1">Phone Number</label>
                     <div className="flex space-x-2">
@@ -579,6 +605,7 @@ export default function LandingPage() {
                       />
                     </div>
                   </div>
+
                   <div>
                     <label className="block text-[11px] font-bold text-slate-600 uppercase mb-1">Password</label>
                     <input 
@@ -590,6 +617,7 @@ export default function LandingPage() {
                       className="w-full bg-amber-50/40 border border-slate-300 rounded-xl px-3.5 py-2.5 text-xs text-slate-900 focus:outline-none focus:border-amber-500 focus:bg-white"
                     />
                   </div>
+
                   <div>
                     <label className="block text-[11px] font-bold text-slate-600 uppercase mb-1">Confirm Password</label>
                     <input 
@@ -603,6 +631,7 @@ export default function LandingPage() {
                   </div>
                 </>
               )}
+
               {authMode === 'login' && (
                 <>
                   <div>
@@ -616,6 +645,7 @@ export default function LandingPage() {
                       className="w-full bg-amber-50/40 border border-slate-300 rounded-xl px-3.5 py-2.5 text-xs text-slate-900 focus:outline-none focus:border-amber-500 focus:bg-white font-mono"
                     />
                   </div>
+
                   <div>
                     <label className="block text-[11px] font-bold text-slate-600 uppercase mb-1">Password</label>
                     <input 
@@ -629,6 +659,7 @@ export default function LandingPage() {
                   </div>
                 </>
               )}
+
               <button
                 type="submit"
                 className="w-full py-3 bg-amber-500 hover:bg-amber-600 text-white font-extrabold text-xs rounded-xl transition mt-2 shadow-md shadow-amber-500/20"
