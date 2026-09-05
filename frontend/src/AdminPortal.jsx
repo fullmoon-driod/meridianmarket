@@ -60,63 +60,98 @@ export default function AdminPortal() {
   const availableAgents = ['Sarah Jenkins', 'Marcus Vance', 'Alex Rivera', 'Unassigned'];
 
   // -------------------------------------------------------------
-  // 3. CLIENTS DATA & ONLINE STATUS
+  // 3. CLIENTS DATA & ONLINE STATUS (UPDATED: Live Backend Fetching)
   // -------------------------------------------------------------
-  const [clients, setClients] = useState(() => {
-    const savedClients = localStorage.getItem('crm_clients');
-    if (savedClients) {
-      try {
-        return JSON.parse(savedClients);
-      } catch (e) {
-        console.error("Error parsing stored clients:", e);
-      }
+  const [clients, setClients] = useState([]);
+  const [loadingClients, setLoadingClients] = useState(false);
+
+  // Fallback initial sample data in case the endpoint returns an empty array or encounters an error
+  const initialFallbackClients = [
+    {
+      id: 'CL-8821',
+      name: 'Alex Vance',
+      email: 'alex.vance@gmail.com',
+      phone: '+1 (555) 234-5678',
+      ip: '192.168.1.45 (New York, US)',
+      assignedAgent: 'Sarah Jenkins',
+      kycStatus: 'REJECTED',
+      balanceUSD: 500.00,
+      bonusUSD: 0.00,
+      isOnline: true,
+      callNotes: ['Called on 10/08: Expressed interest in crypto trading.']
+    },
+    {
+      id: 'CL-4109',
+      name: 'David Miller',
+      email: 'david.m@yahoo.com',
+      phone: '+44 20 7946 0912',
+      ip: '82.165.197.1 (London, UK)',
+      assignedAgent: 'Marcus Vance',
+      kycStatus: 'VERIFIED',
+      balanceUSD: 10480.20,
+      bonusUSD: 250.00,
+      isOnline: false,
+      callNotes: ['Awaiting follow-up regarding foreign exchange leverage options.']
+    },
+    {
+      id: 'CL-3391',
+      name: 'Elena Rostova',
+      email: 'elena.r@outmail.com',
+      phone: '+63 917 555 0192',
+      ip: '103.22.201.4 (Manila, PH)',
+      assignedAgent: 'Sarah Jenkins',
+      kycStatus: 'VERIFIED',
+      balanceUSD: 3200.00,
+      bonusUSD: 100.00,
+      isOnline: true,
+      callNotes: ['Initial onboarding call complete.']
     }
-    return [
-      {
-        id: 'CL-8821',
-        name: 'Alex Vance',
-        email: 'alex.vance@gmail.com',
-        phone: '+1 (555) 234-5678',
-        ip: '192.168.1.45 (New York, US)',
-        assignedAgent: 'Sarah Jenkins',
-        kycStatus: 'REJECTED',
-        balanceUSD: 500.00,
-        bonusUSD: 0.00,
-        isOnline: true,
-        callNotes: ['Called on 10/08: Expressed interest in crypto trading.']
-      },
-      {
-        id: 'CL-4109',
-        name: 'David Miller',
-        email: 'david.m@yahoo.com',
-        phone: '+44 20 7946 0912',
-        ip: '82.165.197.1 (London, UK)',
-        assignedAgent: 'Marcus Vance',
-        kycStatus: 'VERIFIED',
-        balanceUSD: 10480.20,
-        bonusUSD: 250.00,
-        isOnline: false,
-        callNotes: ['Awaiting follow-up regarding foreign exchange leverage options.']
-      },
-      {
-        id: 'CL-3391',
-        name: 'Elena Rostova',
-        email: 'elena.r@outmail.com',
-        phone: '+63 917 555 0192',
-        ip: '103.22.201.4 (Manila, PH)',
-        assignedAgent: 'Sarah Jenkins',
-        kycStatus: 'VERIFIED',
-        balanceUSD: 3200.00,
-        bonusUSD: 100.00,
-        isOnline: true,
-        callNotes: ['Initial onboarding call complete.']
+  ];
+
+  const fetchClients = async () => {
+    try {
+      const response = await fetch('/api/admin/clients-detailed');
+      if (response.ok) {
+        const data = await response.json();
+        const rawClients = data.clients || data;
+
+        if (Array.isArray(rawClients) && rawClients.length > 0) {
+          const formattedClients = rawClients.map((c) => ({
+            id: `CL-${c.id}`,
+            dbId: c.id,
+            name: c.full_name || c.name || 'Unknown',
+            email: c.email || 'N/A',
+            phone: c.phone || 'N/A',
+            ip: c.ip_address || c.ip || '127.0.0.1',
+            assignedAgent: c.agent_name || c.assignedAgent || 'Unassigned',
+            kycStatus: c.kycStatus || 'PENDING',
+            balanceUSD: typeof c.balanceUSD === 'number' ? c.balanceUSD : parseFloat(c.balanceUSD || 0),
+            bonusUSD: typeof c.bonusUSD === 'number' ? c.bonusUSD : parseFloat(c.bonusUSD || 0),
+            isOnline: c.isOnline !== undefined ? c.isOnline : true,
+            callNotes: c.callNotes || []
+          }));
+          setClients(formattedClients);
+          return;
+        }
       }
-    ];
-  });
+    } catch (err) {
+      console.error('Error fetching live clients from backend route /api/admin/clients-detailed:', err);
+    }
+    
+    // If backend fetch fails or returns empty data, set fallback data if list is empty
+    setClients((prevClients) => (prevClients.length > 0 ? prevClients : initialFallbackClients));
+  };
 
   useEffect(() => {
-    localStorage.setItem('crm_clients', JSON.stringify(clients));
-  }, [clients]);
+    if (currentUser) {
+      setLoadingClients(true);
+      fetchClients().finally(() => setLoadingClients(false));
+
+      // Poll every 5 seconds to reflect newly registered clients automatically
+      const interval = setInterval(fetchClients, 5000);
+      return () => clearInterval(interval);
+    }
+  }, [currentUser]);
 
   // Memoize visible clients according to role permissions
   const visibleClients = useMemo(() => {
@@ -129,7 +164,6 @@ export default function AdminPortal() {
           (c.email || '').toLowerCase().includes(q) ||
           (c.ip || '').toLowerCase().includes(q)
         ));
-
       if (!currentUser) return false;
       if (currentUser.role === 'ADMIN') return matchesSearch;
       
@@ -229,7 +263,6 @@ export default function AdminPortal() {
     e.preventDefault();
     const amt = parseFloat(adjustmentAmount);
     if (!amt || amt <= 0) return alert('Please enter a valid dollar amount.');
-
     setClients(clients.map(client => {
       if (client.id === selectedClientId) {
         if (adjustmentType === 'BONUS') {
@@ -268,7 +301,6 @@ export default function AdminPortal() {
   const handleAddCallNote = (e) => {
     e.preventDefault();
     if (!newNote.trim() || !activeCallClient) return;
-
     const noteText = `[${new Date().toLocaleTimeString()}] (${currentUser.name}): ${newNote}`;
     
     setClients(clients.map(c => {
@@ -277,12 +309,10 @@ export default function AdminPortal() {
       }
       return c;
     }));
-
     setActiveCallClient({
       ...activeCallClient,
       callNotes: [noteText, ...(activeCallClient.callNotes || [])]
     });
-
     setNewNote('');
   };
 
@@ -300,14 +330,12 @@ export default function AdminPortal() {
             <h1 className="text-xl font-black text-white tracking-widest uppercase">MERIDIAN CRM</h1>
             <p className="text-xs text-slate-400 font-mono">Authentication Required</p>
           </div>
-
           <form onSubmit={handleLogin} className="space-y-4 font-mono text-xs">
             {loginError && (
               <div className="p-3 bg-rose-500/10 border border-rose-500/30 text-rose-400 rounded-xl text-center">
                 {loginError}
               </div>
             )}
-
             <div>
               <label className="block text-slate-400 uppercase mb-1">Email Terminal ID</label>
               <input 
@@ -319,7 +347,6 @@ export default function AdminPortal() {
                 className="w-full bg-slate-900 border border-slate-800 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-cyan-500"
               />
             </div>
-
             <div>
               <label className="block text-slate-400 uppercase mb-1">Passcode</label>
               <input 
@@ -331,7 +358,6 @@ export default function AdminPortal() {
                 className="w-full bg-slate-900 border border-slate-800 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-cyan-500"
               />
             </div>
-
             <button 
               type="submit" 
               className="w-full py-3.5 bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold font-sans rounded-xl transition uppercase tracking-wider cursor-pointer"
@@ -339,7 +365,6 @@ export default function AdminPortal() {
               Authenticate Session
             </button>
           </form>
-
           <div className="border-t border-slate-900 pt-4 text-[11px] font-mono text-slate-500 space-y-1">
             <p><strong>Admin Portal:</strong> admin@meridian.com / admin123</p>
             <p><strong>Agent Portal:</strong> agent@meridian.com / agent123</p>
@@ -371,7 +396,6 @@ export default function AdminPortal() {
             </p>
           </div>
         </div>
-
         <div className="flex items-center space-x-4">
           {/* NOTIFICATION CENTER */}
           <div className="relative">
@@ -384,7 +408,6 @@ export default function AdminPortal() {
                 <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-rose-500 rounded-full animate-pulse" />
               )}
             </button>
-
             {showNotifications && (
               <div className="absolute right-0 mt-3 w-80 bg-slate-950 border border-slate-800 rounded-2xl shadow-2xl p-4 font-mono text-xs z-50">
                 <div className="flex justify-between items-center pb-2 border-b border-slate-800 mb-3">
@@ -396,7 +419,6 @@ export default function AdminPortal() {
                     Clear Badges
                   </button>
                 </div>
-
                 <div className="space-y-2 max-h-60 overflow-y-auto">
                   {notifications.length === 0 ? (
                     <p className="text-slate-500 text-center py-2">No active notifications</p>
@@ -419,7 +441,6 @@ export default function AdminPortal() {
               </div>
             )}
           </div>
-
           <button 
             onClick={handleLogout} 
             className="px-4 py-2 bg-slate-900 border border-slate-800 hover:border-slate-700 text-xs text-slate-300 rounded-xl font-mono flex items-center space-x-2 transition cursor-pointer"
@@ -429,7 +450,6 @@ export default function AdminPortal() {
           </button>
         </div>
       </header>
-
       <main className="flex-1 max-w-7xl w-full mx-auto p-8 space-y-6">
         <div className="flex flex-col md:flex-row justify-between items-stretch md:items-center gap-4">
           <div className="flex items-center space-x-3 font-mono">
@@ -444,7 +464,6 @@ export default function AdminPortal() {
               <Users className="w-4 h-4" />
               <span>{currentUser.role === 'ADMIN' ? 'All Clients' : 'My Assigned Clients'} ({visibleClients.length})</span>
             </button>
-
             {currentUser.role === 'ADMIN' && (
               <button
                 onClick={() => setActiveCrmTab('financial_ops')}
@@ -459,7 +478,6 @@ export default function AdminPortal() {
               </button>
             )}
           </div>
-
           <div className="relative min-w-[320px]">
             <Search className="w-4 h-4 text-slate-500 absolute left-3.5 top-3" />
             <input 
@@ -471,7 +489,6 @@ export default function AdminPortal() {
             />
           </div>
         </div>
-
         {activeCrmTab === 'assigned' && (
           <div className="bg-slate-900/40 border border-slate-800/80 rounded-2xl overflow-hidden shadow-2xl backdrop-blur-md">
             <table className="w-full text-left font-mono text-xs">
@@ -557,7 +574,6 @@ export default function AdminPortal() {
             </table>
           </div>
         )}
-
         {activeCrmTab === 'financial_ops' && currentUser.role === 'ADMIN' && (
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
             <div className="lg:col-span-2 space-y-6">
@@ -587,7 +603,6 @@ export default function AdminPortal() {
                 )}
               </div>
             </div>
-
             <div className="bg-slate-900/40 border border-slate-800/80 rounded-2xl p-6 shadow-2xl backdrop-blur-md space-y-4">
               <h2 className="text-xs font-bold text-white uppercase font-mono tracking-wider flex items-center space-x-2 pb-2 border-b border-slate-800">
                 <DollarSign className="w-4 h-4 text-emerald-400" />
@@ -648,7 +663,6 @@ export default function AdminPortal() {
           </div>
         )}
       </main>
-
       {/* CALL CENTER DRAWER */}
       {activeCallClient && (
         <div className="fixed bottom-6 right-6 w-96 bg-slate-950 border border-slate-800 rounded-2xl shadow-2xl p-5 space-y-4 font-mono z-50">
