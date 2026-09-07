@@ -37,19 +37,12 @@ import {
 // ==========================================
 // 0. OPTIONAL REAL PRICE FEED (OFF BY DEFAULT)
 // ==========================================
-// The existing app has no market-data integration — watchlist prices below are
-// INDICATIVE SEED VALUES driven by the original local simulator.
-// To switch the watchlist to real quotes, point this at an endpoint that returns
-// a flat JSON map of { "EUR/USD": 1.0842, "AAPL": 224.5, ... }.
-// While it is an empty string, nothing changes and the original simulator runs.
 const PRICE_FEED_URL = '';
 const PRICE_FEED_INTERVAL_MS = 5000;
 
 // ==========================================
 // 1. MULTI-ASSET MATRIX & INITIAL DATA
 // ==========================================
-// `tv` = TradingView ticker used by the chart panel (real live market data).
-// `price` = indicative seed only; see PRICE_FEED_URL above.
 const MULTI_ASSET_REGISTRY = {
   // ---------- FOREX : MAJORS ----------
   'EUR/USD': { name: 'EUR/USD (Euro / US Dollar)', price: 1.08420, digits: 5, category: 'Forex', spread: '0.2 pips', tv: 'OANDA:EURUSD' },
@@ -59,7 +52,6 @@ const MULTI_ASSET_REGISTRY = {
   'USD/CAD': { name: 'USD/CAD (US Dollar / Canadian Dollar)', price: 1.36850, digits: 5, category: 'Forex', spread: '0.5 pips', tv: 'OANDA:USDCAD' },
   'AUD/USD': { name: 'AUD/USD (Australian Dollar)', price: 0.65820, digits: 5, category: 'Forex', spread: '0.3 pips', tv: 'OANDA:AUDUSD' },
   'NZD/USD': { name: 'NZD/USD (New Zealand Dollar)', price: 0.60140, digits: 5, category: 'Forex', spread: '0.6 pips', tv: 'OANDA:NZDUSD' },
-
   // ---------- FOREX : MINORS / CROSSES ----------
   'EUR/GBP': { name: 'EUR/GBP (Euro / British Pound)', price: 0.85700, digits: 5, category: 'Forex', spread: '0.5 pips', tv: 'OANDA:EURGBP' },
   'EUR/JPY': { name: 'EUR/JPY (Euro / Japanese Yen)', price: 167.230, digits: 3, category: 'Forex', spread: '0.6 pips', tv: 'OANDA:EURJPY' },
@@ -82,7 +74,6 @@ const MULTI_ASSET_REGISTRY = {
   'NZD/JPY': { name: 'NZD/JPY (NZ Dollar / Yen)', price: 92.760, digits: 3, category: 'Forex', spread: '1.0 pips', tv: 'OANDA:NZDJPY' },
   'NZD/CAD': { name: 'NZD/CAD (NZ Dollar / CAD)', price: 0.82310, digits: 5, category: 'Forex', spread: '1.4 pips', tv: 'OANDA:NZDCAD' },
   'NZD/CHF': { name: 'NZD/CHF (NZ Dollar / Franc)', price: 0.54370, digits: 5, category: 'Forex', spread: '1.3 pips', tv: 'OANDA:NZDCHF' },
-
   // ---------- FOREX : EXOTICS ----------
   'USD/MXN': { name: 'USD/MXN (US Dollar / Mexican Peso)', price: 17.8420, digits: 4, category: 'Forex', spread: '12.0 pips', tv: 'OANDA:USDMXN' },
   'USD/ZAR': { name: 'USD/ZAR (US Dollar / South African Rand)', price: 18.4310, digits: 4, category: 'Forex', spread: '14.0 pips', tv: 'OANDA:USDZAR' },
@@ -97,7 +88,6 @@ const MULTI_ASSET_REGISTRY = {
   'EUR/SEK': { name: 'EUR/SEK (Euro / Swedish Krona)', price: 11.3520, digits: 4, category: 'Forex', spread: '20.0 pips', tv: 'OANDA:EURSEK' },
   'EUR/NOK': { name: 'EUR/NOK (Euro / Norwegian Krone)', price: 11.5140, digits: 4, category: 'Forex', spread: '20.0 pips', tv: 'OANDA:EURNOK' },
   'EUR/TRY': { name: 'EUR/TRY (Euro / Turkish Lira)', price: 35.1400, digits: 4, category: 'Forex', spread: '30.0 pips', tv: 'OANDA:EURTRY' },
-
   // ---------- METALS ----------
   'XAU/USD': { name: 'XAU/USD (Gold Spot / US Dollar)', price: 2380.50, digits: 2, category: 'Metals', spread: '1.2 pips', tv: 'OANDA:XAUUSD' },
   'XAG/USD': { name: 'XAG/USD (Silver Spot)', price: 28.40, digits: 2, category: 'Metals', spread: '1.5 pips', tv: 'OANDA:XAGUSD' },
@@ -105,7 +95,6 @@ const MULTI_ASSET_REGISTRY = {
   'XPD/USD': { name: 'XPD/USD (Palladium Spot)', price: 942.10, digits: 2, category: 'Metals', spread: '4.5 pips', tv: 'OANDA:XPDUSD' },
   'XAU/EUR': { name: 'XAU/EUR (Gold Spot / Euro)', price: 2195.20, digits: 2, category: 'Metals', spread: '1.8 pips', tv: 'OANDA:XAUEUR' },
   'XCU/USD': { name: 'XCU/USD (Copper Spot)', price: 4.4820, digits: 4, category: 'Metals', spread: '2.5 pips', tv: 'OANDA:XCUUSD' },
-
   // ---------- COMMODITIES ----------
   'USOIL': { name: 'USOIL (WTI Crude Oil)', price: 78.420, digits: 3, category: 'Commodities', spread: '3.0 pips', tv: 'TVC:USOIL' },
   'UKOIL': { name: 'UKOIL (Brent Crude Oil)', price: 82.610, digits: 3, category: 'Commodities', spread: '3.0 pips', tv: 'TVC:UKOIL' },
@@ -117,7 +106,6 @@ const MULTI_ASSET_REGISTRY = {
   'COFFEE': { name: 'COFFEE (Arabica Coffee)', price: 228.60, digits: 2, category: 'Commodities', spread: '6.0 pips', tv: 'ICEUS:KC1!' },
   'COCOA': { name: 'COCOA (ICE Cocoa Futures)', price: 7420.00, digits: 2, category: 'Commodities', spread: '8.0 pips', tv: 'ICEUS:CC1!' },
   'COTTON': { name: 'COTTON (No. 2 Cotton Futures)', price: 72.14, digits: 2, category: 'Commodities', spread: '5.0 pips', tv: 'ICEUS:CT1!' },
-
   // ---------- CRYPTO ----------
   'BTC/USD': { name: 'BTC/USD (Bitcoin Spot)', price: 61500.00, digits: 2, category: 'Crypto', spread: '10.0 pips', tv: 'BINANCE:BTCUSDT' },
   'ETH/USD': { name: 'ETH/USD (Ethereum Spot)', price: 3480.00, digits: 2, category: 'Crypto', spread: '1.5 pips', tv: 'BINANCE:ETHUSDT' },
@@ -137,7 +125,6 @@ const MULTI_ASSET_REGISTRY = {
   'XLM/USD': { name: 'XLM/USD (Stellar Spot)', price: 0.1042, digits: 4, category: 'Crypto', spread: '0.5 pips', tv: 'BINANCE:XLMUSDT' },
   'NEAR/USD': { name: 'NEAR/USD (NEAR Protocol Spot)', price: 4.812, digits: 3, category: 'Crypto', spread: '0.8 pips', tv: 'BINANCE:NEARUSDT' },
   'ARB/USD': { name: 'ARB/USD (Arbitrum Spot)', price: 0.7914, digits: 4, category: 'Crypto', spread: '0.7 pips', tv: 'BINANCE:ARBUSDT' },
-
   // ---------- STOCKS ----------
   'NVDA': { name: 'NVIDIA Corp.', price: 128.30, digits: 2, category: 'Stocks', spread: '0.1 pips', tv: 'NASDAQ:NVDA' },
   'AAPL': { name: 'Apple Inc.', price: 224.50, digits: 2, category: 'Stocks', spread: '0.1 pips', tv: 'NASDAQ:AAPL' },
@@ -167,7 +154,6 @@ const MULTI_ASSET_REGISTRY = {
   'PFE': { name: 'Pfizer Inc.', price: 28.64, digits: 2, category: 'Stocks', spread: '0.1 pips', tv: 'NYSE:PFE' },
   'JNJ': { name: 'Johnson & Johnson', price: 148.30, digits: 2, category: 'Stocks', spread: '0.2 pips', tv: 'NYSE:JNJ' },
   'UBER': { name: 'Uber Technologies Inc.', price: 68.24, digits: 2, category: 'Stocks', spread: '0.2 pips', tv: 'NYSE:UBER' },
-
   // ---------- INDICES ----------
   'US30': { name: 'US30 (Dow Jones Industrial)', price: 38900.00, digits: 2, category: 'Indices', spread: '2.0 pips', tv: 'TVC:DJI' },
   'NAS100': { name: 'NAS100 (US Tech 100 Index)', price: 18250.00, digits: 2, category: 'Indices', spread: '1.8 pips', tv: 'TVC:NDX' },
@@ -253,7 +239,6 @@ const CRYPTO_WALLETS = [
 // 4. PRESENTATION LAYER (styles, chart, helpers)
 // ==========================================
 const ASSET_CATEGORIES = ['ALL', 'FOREX', 'STOCKS', 'METALS', 'COMMODITIES', 'CRYPTO', 'INDICES'];
-
 const CHART_INTERVALS = [
   { label: '1m', value: '1' },
   { label: '5m', value: '5' },
@@ -267,10 +252,8 @@ function TerminalStyles() {
   return (
     <style>{`
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
-
 .td-root{font-family:'Inter',ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;-webkit-font-smoothing:antialiased}
 .td-num{font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,Menlo,monospace;font-variant-numeric:tabular-nums}
-
 @keyframes tdFadeUp{from{opacity:0;transform:translate3d(0,10px,0)}to{opacity:1;transform:none}}
 @keyframes tdPulseRing{0%{transform:scale(.85);opacity:.9}70%{transform:scale(2.2);opacity:0}100%{opacity:0}}
 @keyframes tdMarquee{from{transform:translate3d(0,0,0)}to{transform:translate3d(-50%,0,0)}}
@@ -278,17 +261,14 @@ function TerminalStyles() {
 @keyframes tdFlashDown{0%{background-color:rgba(244,63,94,.26)}100%{background-color:transparent}}
 @keyframes tdGlow{0%,100%{opacity:.5}50%{opacity:1}}
 @keyframes tdSpin{to{transform:rotate(360deg)}}
-
 .td-enter{animation:tdFadeUp .45s cubic-bezier(.16,1,.3,1) both}
 .td-glow{animation:tdGlow 3.2s ease-in-out infinite}
 .td-spin{animation:tdSpin 1.1s linear infinite}
 .td-flash-up{animation:tdFlashUp .7s ease-out}
 .td-flash-down{animation:tdFlashDown .7s ease-out}
-
 .td-marquee{display:flex;width:max-content;animation:tdMarquee 48s linear infinite}
 .td-marquee:hover{animation-play-state:paused}
 .td-fade-x{-webkit-mask-image:linear-gradient(90deg,transparent,#000 4%,#000 96%,transparent);mask-image:linear-gradient(90deg,transparent,#000 4%,#000 96%,transparent)}
-
 .td-panel{background:linear-gradient(168deg,rgba(20,29,48,.82),rgba(8,12,24,.92));border:1px solid rgba(148,163,184,.13);backdrop-filter:blur(14px)}
 .td-inset{background:rgba(2,6,16,.55);border:1px solid rgba(148,163,184,.10)}
 .td-row{transition:background-color .18s,border-color .18s,transform .18s}
@@ -297,15 +277,12 @@ function TerminalStyles() {
 .td-buy:hover{filter:brightness(1.12);transform:translateY(-2px);box-shadow:0 16px 32px -14px rgba(16,185,129,.9)}
 .td-sell{background:linear-gradient(96deg,#F43F5E,#DC2626);transition:filter .25s,transform .25s,box-shadow .25s}
 .td-sell:hover{filter:brightness(1.12);transform:translateY(-2px);box-shadow:0 16px 32px -14px rgba(244,63,94,.9)}
-
 .td-scroll{scrollbar-width:thin;scrollbar-color:rgba(148,163,184,.28) transparent}
 .td-scroll::-webkit-scrollbar{width:7px;height:7px}
 .td-scroll::-webkit-scrollbar-track{background:transparent}
 .td-scroll::-webkit-scrollbar-thumb{background:rgba(148,163,184,.26);border-radius:99px}
 .td-scroll::-webkit-scrollbar-thumb:hover{background:rgba(34,211,238,.45)}
-
 .td-root a:focus-visible,.td-root button:focus-visible,.td-root input:focus-visible,.td-root select:focus-visible{outline:2px solid #22D3EE;outline-offset:2px;border-radius:10px}
-
 @media (prefers-reduced-motion: reduce){
   .td-root *,.td-root *::before,.td-root *::after{animation-duration:.001ms!important;animation-iteration-count:1!important;transition-duration:.001ms!important}
 }
@@ -370,7 +347,6 @@ function TradingViewChart({ tvSymbol, interval }) {
     let cancelled = false;
     let widget = null;
     setStatus('loading');
-
     const timeout = setTimeout(() => {
       if (!cancelled) setStatus((s) => (s === 'loading' ? 'failed' : s));
     }, 9000);
@@ -405,6 +381,7 @@ function TradingViewChart({ tvSymbol, interval }) {
           gridColor: 'rgba(148,163,184,0.08)',
           studies: []
         });
+
         clearTimeout(timeout);
         if (!cancelled) setStatus('ready');
       })
@@ -489,7 +466,7 @@ export default function TradingDashboard() {
     documentType: 'Passport'
   });
 
-  // Financial Balances (Updated default starting balance to 0.00)
+  // Financial Balances
   const [balanceUSD, setBalanceUSD] = useState(0.00);
   const [equityUSD, setEquityUSD] = useState(0.00);
   const [marginUsed] = useState(0.00);
@@ -511,8 +488,9 @@ export default function TradingDashboard() {
   // Active Open Positions
   const [openPositions, setOpenPositions] = useState([]);
 
-  // Deposit Modal State
+  // Integrated Deposit Form & Modal State
   const [isDepositOpen, setIsDepositOpen] = useState(false);
+  const [selectedDepositMethod, setSelectedDepositMethod] = useState('USDT (TRC-20)');
   const [depositAmountUsdt, setDepositAmountUsdt] = useState('');
   const [copied, setCopied] = useState(false);
   const [copiedWalletId, setCopiedWalletId] = useState(null);
@@ -529,14 +507,13 @@ export default function TradingDashboard() {
   // Filter Assets by Category
   const [assetCategoryFilter, setAssetCategoryFilter] = useState('ALL');
 
-  // --- Presentation-only state (no business logic) ---
+  // Presentation-only state
   const [assetSearch, setAssetSearch] = useState('');
   const [chartInterval, setChartInterval] = useState('60');
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [feedMode, setFeedMode] = useState(PRICE_FEED_URL ? 'live' : 'simulated');
   const [currentUser, setCurrentUser] = useState(null);
 
-  // Read the account record the auth flow already stored. No auth logic changed.
   useEffect(() => {
     try {
       const raw = localStorage.getItem('current_user');
@@ -563,7 +540,7 @@ export default function TradingDashboard() {
     return () => clearInterval(priceInterval);
   }, []);
 
-  // OPTIONAL real quote feed. Inert unless PRICE_FEED_URL is configured.
+  // Real quote feed integration
   useEffect(() => {
     if (!PRICE_FEED_URL) return;
     let alive = true;
@@ -595,7 +572,6 @@ export default function TradingDashboard() {
   const activePrice = livePrices[selectedAssetKey] || activeAsset.price;
   const activeCryptoConfig = REGIONAL_CRYPTO_CONFIG[selectedCountry];
 
-  // Unlocked handleExecuteTrade (KYC check removed)
   const handleExecuteTrade = (type) => {
     const vol = parseFloat(orderVolume) || 0.1;
     const newPosition = {
@@ -631,10 +607,10 @@ export default function TradingDashboard() {
   const handleDepositSubmit = (e) => {
     e.preventDefault();
     const amt = parseFloat(depositAmountUsdt) || 0;
-    if (amt <= 0) return alert('Please enter a valid USDT deposit amount.');
+    if (amt <= 0) return alert('Please enter a valid deposit amount.');
     setIsDepositOpen(false);
     setDepositAmountUsdt('');
-    alert(`USDT Deposit request of ${amt.toLocaleString()} USDT (${activeCryptoConfig.platform}) submitted!\n\nStatus: Pending Admin CRM Verification.`);
+    alert(`Deposit request of $${amt.toLocaleString()} (${selectedDepositMethod}) submitted!\n\nStatus: Pending Admin CRM Verification.`);
   };
 
   const handleWithdrawSubmit = (e) => {
@@ -642,7 +618,6 @@ export default function TradingDashboard() {
     const amt = parseFloat(withdrawForm.amount) || 0;
     if (amt <= 0) return alert('Please enter a valid withdrawal amount.');
     if (amt > balanceUSD) return alert('Insufficient balance for this withdrawal request.');
-
     setIsWithdrawOpen(false);
     setWithdrawForm({ accountName: '', amount: '', paymentMethod: 'Bank Transfer', paymentDetails: '' });
     alert(`Withdrawal request of $${amt.toLocaleString()} submitted successfully!\n\nStatus: Pending Processing.`);
@@ -659,7 +634,6 @@ export default function TradingDashboard() {
     return MULTI_ASSET_REGISTRY[key].category.toUpperCase() === assetCategoryFilter.toUpperCase();
   });
 
-  // Presentation-only search layered on top of the untouched filter above.
   const visibleAssets = useMemo(() => {
     const q = assetSearch.trim().toLowerCase();
     if (!q) return filteredAssets;
@@ -701,7 +675,6 @@ export default function TradingDashboard() {
             </div>
           </div>
 
-          {/* CLIENT NAVIGATION */}
           <nav className="hidden md:flex items-center gap-1 bg-white/[0.04] p-1.5 rounded-xl border border-white/[0.08] text-xs font-semibold">
             {navItems.map(item => (
               <button
@@ -720,7 +693,6 @@ export default function TradingDashboard() {
           </nav>
         </div>
 
-        {/* RIGHT TOP CONTROLS */}
         <div className="flex items-center gap-2.5 sm:gap-3">
           <div className="hidden xl:flex items-center gap-2 bg-white/[0.04] px-3.5 py-2 rounded-xl border border-white/[0.08] text-xs td-num">
             <Globe className="w-3.5 h-3.5 text-cyan-400" />
@@ -741,8 +713,6 @@ export default function TradingDashboard() {
             <span className="text-slate-500">Bal:</span>
             <span className="text-emerald-400 font-extrabold">${balanceUSD.toLocaleString('en-US', { minimumFractionDigits: 2 })}</span>
           </div>
-
-          {/* Deposit button removed as requested — deposit tab and modal remain intact. */}
 
           <button
             onClick={() => setIsWithdrawOpen(true)}
@@ -814,11 +784,9 @@ export default function TradingDashboard() {
 
       {/* MAIN CONTAINER */}
       <main className="flex-1 p-4 sm:p-6 max-w-[1700px] w-full mx-auto space-y-6">
-
         {/* TAB 1: TRADING TERMINAL DESK */}
         {activeTab === 'terminal' && (
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 td-enter">
-
             {/* LEFT 3 COLS: WATCHLIST & ASSET SELECTOR */}
             <div className="lg:col-span-3 td-panel rounded-2xl p-4 flex flex-col lg:h-[820px] shadow-2xl">
               <div className="flex justify-between items-center mb-3.5 pb-3 border-b border-white/[0.08]">
@@ -831,7 +799,6 @@ export default function TradingDashboard() {
                 </span>
               </div>
 
-              {/* Search */}
               <div className="relative mb-3">
                 <Search className="w-3.5 h-3.5 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
                 <input
@@ -843,7 +810,6 @@ export default function TradingDashboard() {
                 />
               </div>
 
-              {/* Category Filters */}
               <div className="flex gap-1 mb-3 bg-white/[0.03] p-1 rounded-xl border border-white/[0.07] text-[10px] font-bold overflow-x-auto td-scroll">
                 {ASSET_CATEGORIES.map(cat => (
                   <button
@@ -860,7 +826,6 @@ export default function TradingDashboard() {
                 ))}
               </div>
 
-              {/* Asset Items List */}
               <div className="space-y-1.5 overflow-y-auto flex-1 min-h-[320px] max-h-[560px] lg:max-h-none pr-1 td-scroll">
                 {visibleAssets.length === 0 && (
                   <div className="text-center py-10 text-xs text-slate-600">No instruments match that search.</div>
@@ -914,8 +879,6 @@ export default function TradingDashboard() {
 
             {/* MIDDLE 6 COLS: LIVE INTERACTIVE CHART & POSITIONS */}
             <div className="lg:col-span-6 space-y-5">
-
-              {/* ACCOUNT SNAPSHOT */}
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                 {[
                   { l: 'Balance', v: `$${balanceUSD.toLocaleString('en-US', { minimumFractionDigits: 2 })}`, c: 'text-white', i: Wallet },
@@ -933,7 +896,6 @@ export default function TradingDashboard() {
                 ))}
               </div>
 
-              {/* CHART CANVAS */}
               <div className="td-panel rounded-2xl p-4 sm:p-5 h-[560px] flex flex-col shadow-2xl relative overflow-hidden">
                 <div className="flex flex-wrap justify-between items-center gap-3 border-b border-white/[0.08] pb-3">
                   <div className="flex items-center gap-3 min-w-0">
@@ -942,7 +904,6 @@ export default function TradingDashboard() {
                       {activeAsset.name}
                     </span>
                   </div>
-
                   <div className="flex items-center gap-3">
                     <div className="flex bg-white/[0.04] p-1 rounded-lg border border-white/[0.08] text-[10px] font-bold">
                       {CHART_INTERVALS.map(iv => (
@@ -966,7 +927,6 @@ export default function TradingDashboard() {
                   </div>
                 </div>
 
-                {/* PROFESSIONAL TRADINGVIEW CHART */}
                 <div className="flex-1 my-4 min-h-0">
                   <TradingViewChart tvSymbol={activeAsset.tv} interval={chartInterval} />
                 </div>
@@ -987,7 +947,6 @@ export default function TradingDashboard() {
                 </div>
               </div>
 
-              {/* OPEN POSITIONS TABLE */}
               <div className="td-panel rounded-2xl p-5 shadow-2xl">
                 <div className="flex justify-between items-center mb-4 pb-2.5 border-b border-white/[0.08]">
                   <h3 className="text-xs font-bold uppercase tracking-wide text-slate-300 flex items-center gap-2">
@@ -1064,7 +1023,6 @@ export default function TradingDashboard() {
                   <span className="td-num text-[10px] bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 px-2 py-0.5 rounded">Market Instant</span>
                 </div>
 
-                {/* Live bid/ask for the selected instrument */}
                 <div className="mb-5 grid grid-cols-2 gap-2.5">
                   <div className="td-inset rounded-xl p-3">
                     <div className="text-[9.5px] font-semibold uppercase tracking-wide text-rose-400 mb-1">Sell / Bid</div>
@@ -1144,7 +1102,6 @@ export default function TradingDashboard() {
                 </div>
               </div>
 
-              {/* EXECUTION BUTTONS */}
               <div className="space-y-3 pt-5 border-t border-white/[0.08]">
                 <div className="grid grid-cols-2 gap-3">
                   <button
@@ -1170,107 +1127,154 @@ export default function TradingDashboard() {
           </div>
         )}
 
-        {/* TAB 2: DEPOSIT PAGE — CRYPTO WALLETS */}
+        {/* TAB 2: DEPOSIT PAGE — REPLACED WITH DEPOSIT MODAL COMPONENTS */}
         {activeTab === 'deposit' && (
-          <div className="max-w-6xl mx-auto space-y-8 py-4 td-enter">
-
+          <div className="max-w-4xl mx-auto space-y-8 py-4 td-enter">
             <div className="text-center max-w-2xl mx-auto space-y-2.5">
               <div className="inline-flex items-center gap-2 bg-emerald-500/10 border border-emerald-500/30 px-3.5 py-1.5 rounded-full text-xs text-emerald-400 font-semibold">
                 <Shield className="w-3.5 h-3.5" />
                 <span>Instant Web3 &amp; Crypto Deposit Gateway</span>
               </div>
-              <h2 className="text-3xl font-extrabold text-white tracking-tight">Deposit Cryptocurrency</h2>
+              <h2 className="text-3xl font-extrabold text-white tracking-tight">Deposit Funds</h2>
               <p className="text-xs text-slate-400 leading-relaxed">
-                Select your preferred cryptocurrency payment method below. Send exact funds to the designated wallet address. Deposits are credited automatically after network confirmations.
+                Choose your preferred payment method and specify your transfer amount. All transactions are securely processed and credited to your trading account.
               </p>
             </div>
 
-            {/* WALLETS GRID */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              {CRYPTO_WALLETS.map((wallet) => (
-                <div
-                  key={wallet.id}
-                  className={`bg-[#080D1A]/80 border ${wallet.borderColor} bg-gradient-to-br ${wallet.color} rounded-2xl p-6 shadow-2xl flex flex-col justify-between backdrop-blur-md hover:scale-[1.01] transition duration-300 relative overflow-hidden`}
-                >
-                  <div className="absolute top-0 right-0 w-32 h-32 bg-white/5 rounded-full blur-2xl pointer-events-none" />
-                  <div>
-                    <div className="flex justify-between items-start mb-6">
-                      <div>
-                        <span className="text-[10px] uppercase tracking-widest text-slate-400 font-bold block mb-1">Method / Network</span>
-                        <h3 className="td-num text-2xl font-extrabold text-white flex items-center gap-2">
-                          <span>{wallet.currency}</span>
-                          <span className="text-xs text-cyan-400 font-normal">[{wallet.network}]</span>
-                        </h3>
-                      </div>
-                      <div className="p-3 bg-black/40 border border-white/10 rounded-xl text-slate-300">
-                        <QrCode className="w-6 h-6" />
-                      </div>
-                    </div>
+            <div className="td-panel rounded-3xl p-6 sm:p-8 shadow-2xl max-w-2xl mx-auto space-y-6">
+              <div className="flex justify-between items-center pb-4 border-b border-white/[0.08]">
+                <h3 className="text-lg font-bold text-white flex items-center gap-2">
+                  <Wallet className="w-5 h-5 text-emerald-400" />
+                  <span>Deposit Details</span>
+                </h3>
+                <span className="td-num text-xs bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 px-3 py-1 rounded-full font-semibold">
+                  Zero Processing Fees
+                </span>
+              </div>
 
-                    {/* ADDRESS BOX */}
-                    <div className="space-y-2 mb-6">
-                      <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wide">Official Wallet Address</label>
-                      <div className="bg-black/40 border border-white/10 rounded-xl p-3.5 flex items-center justify-between td-num text-xs">
-                        <span className="text-emerald-400 font-bold break-all mr-2">{wallet.address}</span>
-                        <button
-                          onClick={() => handleCopyAddress(wallet.address, wallet.id)}
-                          className="px-3 py-1.5 bg-white/[0.07] hover:bg-white/[0.14] text-slate-200 border border-white/10 rounded-lg text-xs font-bold transition flex items-center gap-1.5 shrink-0"
-                        >
-                          {copiedWalletId === wallet.id ? (
-                            <>
-                              <Check className="w-3.5 h-3.5 text-emerald-400" />
-                              <span className="text-emerald-400">Copied</span>
-                            </>
-                          ) : (
-                            <>
-                              <Copy className="w-3.5 h-3.5" />
-                              <span>Copy</span>
-                            </>
-                          )}
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                  <div className="pt-4 border-t border-white/10 flex justify-between items-center text-[10px] td-num text-slate-400">
-                    <span className="flex items-center gap-1.5"><Clock className="w-3 h-3" /> Confirmation: ~2-5 mins</span>
-                    <span className="text-emerald-400 font-bold">● Active Gateway</span>
-                  </div>
+              {/* REGIONAL GATEWAY SELECTOR */}
+              <div className="td-inset p-4 rounded-2xl space-y-2">
+                <div className="text-[10px] text-slate-500 td-num uppercase tracking-wide font-semibold">Selected Regional Gateway</div>
+                <div className="text-xs font-bold text-white flex justify-between items-center">
+                  <span>{activeCryptoConfig.platform} ({activeCryptoConfig.country})</span>
+                  <span className="text-emerald-400 td-num">{activeCryptoConfig.currency}</span>
                 </div>
-              ))}
-            </div>
+              </div>
 
-            {/* REGIONAL DEPOSIT FORM INTEGRATION */}
-            <div className="td-panel rounded-2xl p-6 shadow-2xl max-w-2xl mx-auto">
-              <h3 className="text-base font-bold text-white mb-4 flex items-center gap-2">
-                <Wallet className="w-5 h-5 text-cyan-400" />
-                <span>Submit Deposit Confirmation Ticket</span>
-              </h3>
-              <form onSubmit={handleDepositSubmit} className="space-y-4">
-                <div>
-                  <label className="block text-[10px] font-semibold text-slate-400 uppercase tracking-wide mb-1.5">Selected Regional Gateway</label>
-                  <div className="td-inset rounded-xl p-3 text-xs td-num text-white flex justify-between items-center">
-                    <span>{activeCryptoConfig.country} — {activeCryptoConfig.platform}</span>
-                    <span className="text-emerald-400 font-bold">{activeCryptoConfig.currency}</span>
-                  </div>
+              {/* PAYMENT METHOD SELECTOR */}
+              <div className="space-y-2">
+                <label className="block text-[10px] font-semibold text-slate-400 uppercase tracking-wide">Select Payment Method</label>
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
+                  {['USDT (TRC-20)', 'USDT (ERC-20)', 'Ethereum (ETH)', 'Bitcoin (BTC)', 'Bank Wire'].map((method) => (
+                    <button
+                      key={method}
+                      type="button"
+                      onClick={() => setSelectedDepositMethod(method)}
+                      className={`py-2.5 px-3 rounded-xl border text-xs font-bold transition text-center ${
+                        selectedDepositMethod === method
+                          ? 'bg-cyan-500/20 border-cyan-500 text-cyan-300 shadow-lg shadow-cyan-500/10'
+                          : 'bg-white/[0.03] border-white/[0.08] text-slate-400 hover:text-white hover:border-white/[0.2]'
+                      }`}
+                    >
+                      {method}
+                    </button>
+                  ))}
                 </div>
+              </div>
+
+              {/* WALLET ADDRESS DISPLAY */}
+              <div className="space-y-1.5">
+                <label className="block text-[10px] font-semibold text-slate-400 uppercase tracking-wide">
+                  Deposit Address ({activeCryptoConfig.network})
+                </label>
+                <div className="td-inset rounded-xl p-3.5 flex items-center justify-between td-num text-xs">
+                  <span className="text-emerald-400 font-bold break-all mr-2">{activeCryptoConfig.walletAddress}</span>
+                  <button
+                    onClick={() => handleCopyAddress()}
+                    className="px-3 py-1.5 bg-white/[0.07] hover:bg-white/[0.14] text-slate-200 rounded-lg text-xs font-bold transition flex items-center gap-1.5 shrink-0"
+                  >
+                    {copied ? (
+                      <>
+                        <Check className="w-3.5 h-3.5 text-emerald-400" />
+                        <span className="text-emerald-400">Copied</span>
+                      </>
+                    ) : (
+                      <>
+                        <Copy className="w-3.5 h-3.5" />
+                        <span>Copy</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+
+              {/* DEPOSIT FORM */}
+              <form onSubmit={handleDepositSubmit} className="space-y-4 pt-2">
                 <div>
-                  <label className="block text-[10px] font-semibold text-slate-400 uppercase tracking-wide mb-1.5">Deposit Amount (USDT)</label>
+                  <label className="block text-[10px] font-semibold text-slate-400 uppercase tracking-wide mb-1.5">Deposit Amount (USD)</label>
                   <input
                     type="number"
                     required
-                    placeholder="e.g. 1000"
+                    placeholder="e.g. 500"
                     value={depositAmountUsdt}
                     onChange={(e) => setDepositAmountUsdt(e.target.value)}
-                    className="w-full td-inset rounded-xl px-4 py-3 text-sm text-white td-num focus:outline-none focus:border-cyan-500/60 transition"
+                    className="w-full td-inset rounded-xl px-4 py-3.5 text-sm text-white td-num focus:outline-none focus:border-emerald-500/60 transition"
                   />
                 </div>
+
+                <div className="flex gap-2">
+                  {['100', '250', '500', '1000', '5000'].map((amt) => (
+                    <button
+                      key={amt}
+                      type="button"
+                      onClick={() => setDepositAmountUsdt(amt)}
+                      className="flex-1 py-1.5 rounded-lg bg-white/[0.04] border border-white/[0.08] text-[11px] font-bold td-num text-slate-400 hover:text-white hover:border-emerald-500/40 transition"
+                    >
+                      ${amt}
+                    </button>
+                  ))}
+                </div>
+
                 <button
                   type="submit"
-                  className="w-full py-3.5 bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 text-slate-950 font-extrabold text-xs rounded-xl shadow-lg shadow-emerald-500/25 transition"
+                  className="w-full py-4 bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 text-slate-950 font-extrabold text-xs rounded-xl shadow-lg shadow-emerald-500/25 transition mt-2"
                 >
-                  Confirm Deposit Transfer
+                  Submit Deposit Request
                 </button>
               </form>
+            </div>
+
+            {/* EXPANDED CRYPTO WALLETS LIST FOR QUICK SELECTION */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 max-w-2xl mx-auto">
+              {CRYPTO_WALLETS.map((wallet) => (
+                <div
+                  key={wallet.id}
+                  className={`bg-[#080D1A]/80 border ${wallet.borderColor} bg-gradient-to-br ${wallet.color} rounded-2xl p-4 shadow-xl flex flex-col justify-between backdrop-blur-md relative overflow-hidden`}
+                >
+                  <div className="flex justify-between items-start mb-3">
+                    <div>
+                      <span className="text-[10px] uppercase tracking-widest text-slate-400 font-bold block">Method / Network</span>
+                      <h4 className="td-num text-lg font-extrabold text-white flex items-center gap-2">
+                        <span>{wallet.currency}</span>
+                        <span className="text-xs text-cyan-400 font-normal">[{wallet.network}]</span>
+                      </h4>
+                    </div>
+                    <div className="p-2 bg-black/40 border border-white/10 rounded-xl text-slate-300">
+                      <QrCode className="w-5 h-5" />
+                    </div>
+                  </div>
+                  <div className="bg-black/40 border border-white/10 rounded-xl p-2.5 flex items-center justify-between td-num text-[11px]">
+                    <span className="text-emerald-400 font-bold truncate mr-2">{wallet.address}</span>
+                    <button
+                      onClick={() => handleCopyAddress(wallet.address, wallet.id)}
+                      className="px-2.5 py-1 bg-white/[0.07] hover:bg-white/[0.14] text-slate-200 border border-white/10 rounded text-[10px] font-bold transition flex items-center gap-1 shrink-0"
+                    >
+                      {copiedWalletId === wallet.id ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
+                      <span>{copiedWalletId === wallet.id ? 'Copied' : 'Copy'}</span>
+                    </button>
+                  </div>
+                </div>
+              ))}
             </div>
           </div>
         )}
@@ -1308,6 +1312,7 @@ export default function TradingDashboard() {
                     className="w-full td-inset rounded-xl px-4 py-3 text-xs text-white focus:outline-none focus:border-cyan-500/60 transition"
                   />
                 </div>
+
                 <div>
                   <label className="block text-[10px] font-semibold text-slate-400 uppercase tracking-wide mb-1.5">Document Type</label>
                   <select
@@ -1320,6 +1325,7 @@ export default function TradingDashboard() {
                     <option value="Driver License">Driver License</option>
                   </select>
                 </div>
+
                 <div>
                   <label className="block text-[10px] font-semibold text-slate-400 uppercase tracking-wide mb-1.5">Document / ID Number</label>
                   <input
@@ -1331,11 +1337,13 @@ export default function TradingDashboard() {
                     className="w-full td-inset rounded-xl px-4 py-3 text-xs text-white td-num focus:outline-none focus:border-cyan-500/60 transition"
                   />
                 </div>
+
                 <div className="border-2 border-dashed border-white/10 hover:border-cyan-500/50 rounded-xl p-8 text-center cursor-pointer transition bg-white/[0.02]">
                   <Upload className="w-8 h-8 text-cyan-400 mx-auto mb-2" />
                   <div className="text-xs font-bold text-white">Click or drag front image of ID document</div>
                   <div className="text-[10px] text-slate-500 mt-1">PNG, JPG or PDF (Max 10MB)</div>
                 </div>
+
                 <button
                   type="submit"
                   className="w-full py-3.5 bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-slate-950 font-extrabold text-xs rounded-xl shadow-lg shadow-cyan-500/25 transition"
@@ -1347,11 +1355,9 @@ export default function TradingDashboard() {
           </div>
         )}
 
-        {/* TAB 4: PROFILE — reads the account record already stored at login */}
+        {/* TAB 4: PROFILE */}
         {activeTab === 'profile' && (
           <div className="max-w-5xl mx-auto py-4 space-y-5 td-enter">
-
-            {/* IDENTITY HEADER */}
             <div className="td-panel rounded-2xl p-6 sm:p-7 shadow-2xl relative overflow-hidden">
               <div className="absolute -top-20 -right-16 w-64 h-64 rounded-full bg-cyan-500/10 blur-[90px] pointer-events-none" />
               <div className="relative flex flex-col sm:flex-row sm:items-center gap-5">
@@ -1393,7 +1399,6 @@ export default function TradingDashboard() {
               </div>
             )}
 
-            {/* ACCOUNT DETAILS */}
             <div className="td-panel rounded-2xl p-6 shadow-2xl">
               <h3 className="text-xs font-bold uppercase tracking-wide text-cyan-400 flex items-center gap-2 mb-5 pb-3 border-b border-white/[0.08]">
                 <User className="w-4 h-4" />
@@ -1417,7 +1422,6 @@ export default function TradingDashboard() {
               </div>
             </div>
 
-            {/* TRADING ACCOUNT */}
             <div className="td-panel rounded-2xl p-6 shadow-2xl">
               <h3 className="text-xs font-bold uppercase tracking-wide text-cyan-400 flex items-center gap-2 mb-5 pb-3 border-b border-white/[0.08]">
                 <BarChart2 className="w-4 h-4" />
