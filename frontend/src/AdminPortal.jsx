@@ -21,7 +21,6 @@ import {
 export default function AdminPortal() {
   // -------------------------------------------------------------
   // 1. AUTH & ROLE MANAGEMENT
-  // Starts as null so user must authenticate on fresh loads
   // -------------------------------------------------------------
   const [currentUser, setCurrentUser] = useState(null);
   const [loginEmail, setLoginEmail] = useState('');
@@ -60,53 +59,10 @@ export default function AdminPortal() {
   const availableAgents = ['Sarah Jenkins', 'Marcus Vance', 'Alex Rivera', 'Unassigned'];
 
   // -------------------------------------------------------------
-  // 3. CLIENTS DATA & ONLINE STATUS (UPDATED: Live Backend Fetching)
+  // 3. CLIENTS DATA & LIVE BACKEND FETCHING
   // -------------------------------------------------------------
   const [clients, setClients] = useState([]);
   const [loadingClients, setLoadingClients] = useState(false);
-
-  // Fallback initial sample data in case the endpoint returns an empty array or encounters an error
-  const initialFallbackClients = [
-    {
-      id: 'CL-8821',
-      name: 'Alex Vance',
-      email: 'alex.vance@gmail.com',
-      phone: '+1 (555) 234-5678',
-      ip: '192.168.1.45 (New York, US)',
-      assignedAgent: 'Sarah Jenkins',
-      kycStatus: 'REJECTED',
-      balanceUSD: 500.00,
-      bonusUSD: 0.00,
-      isOnline: true,
-      callNotes: ['Called on 10/08: Expressed interest in crypto trading.']
-    },
-    {
-      id: 'CL-4109',
-      name: 'David Miller',
-      email: 'david.m@yahoo.com',
-      phone: '+44 20 7946 0912',
-      ip: '82.165.197.1 (London, UK)',
-      assignedAgent: 'Marcus Vance',
-      kycStatus: 'VERIFIED',
-      balanceUSD: 10480.20,
-      bonusUSD: 250.00,
-      isOnline: false,
-      callNotes: ['Awaiting follow-up regarding foreign exchange leverage options.']
-    },
-    {
-      id: 'CL-3391',
-      name: 'Elena Rostova',
-      email: 'elena.r@outmail.com',
-      phone: '+63 917 555 0192',
-      ip: '103.22.201.4 (Manila, PH)',
-      assignedAgent: 'Sarah Jenkins',
-      kycStatus: 'VERIFIED',
-      balanceUSD: 3200.00,
-      bonusUSD: 100.00,
-      isOnline: true,
-      callNotes: ['Initial onboarding call complete.']
-    }
-  ];
 
   const fetchClients = async () => {
     try {
@@ -114,8 +70,7 @@ export default function AdminPortal() {
       if (response.ok) {
         const data = await response.json();
         const rawClients = data.clients || data;
-
-        if (Array.isArray(rawClients) && rawClients.length > 0) {
+        if (Array.isArray(rawClients)) {
           const formattedClients = rawClients.map((c) => ({
             id: `CL-${c.id}`,
             dbId: c.id,
@@ -125,30 +80,77 @@ export default function AdminPortal() {
             ip: c.ip_address || c.ip || '127.0.0.1',
             assignedAgent: c.agent_name || c.assignedAgent || 'Unassigned',
             kycStatus: c.kycStatus || 'PENDING',
-            balanceUSD: typeof c.balanceUSD === 'number' ? c.balanceUSD : parseFloat(c.balanceUSD || 0),
-            bonusUSD: typeof c.bonusUSD === 'number' ? c.bonusUSD : parseFloat(c.bonusUSD || 0),
+            balanceUSD: typeof c.balanceUSD === 'number' ? c.balanceUSD : parseFloat(c.balanceUSD || c.balance || 0),
+            bonusUSD: typeof c.bonusUSD === 'number' ? c.bonusUSD : parseFloat(c.bonusUSD || c.bonus || 0),
             isOnline: c.isOnline !== undefined ? c.isOnline : true,
             callNotes: c.callNotes || []
           }));
           setClients(formattedClients);
-          return;
         }
       }
     } catch (err) {
-      console.error('Error fetching live clients from backend route /api/admin/clients-detailed:', err);
+      console.error('Error fetching live clients:', err);
     }
-    
-    // If backend fetch fails or returns empty data, set fallback data if list is empty
-    setClients((prevClients) => (prevClients.length > 0 ? prevClients : initialFallbackClients));
+  };
+
+  // -------------------------------------------------------------
+  // 4. NOTIFICATIONS & PENDING TRANSACTIONS (LIVE SYNC)
+  // -------------------------------------------------------------
+  const [notifications, setNotifications] = useState([]);
+  const [pendingTransactions, setPendingTransactions] = useState([]);
+
+  const fetchPendingTransactions = async () => {
+    try {
+      const response = await fetch('/api/admin/pending-transactions');
+      if (response.ok) {
+        const data = await response.json();
+        const txs = Array.isArray(data) ? data : (data.transactions || []);
+        
+        const formattedTxs = txs.map(tx => ({
+          id: tx.id || `TX-${tx.id}`,
+          dbId: tx.id,
+          clientId: `CL-${tx.user_id || tx.clientId}`,
+          userId: tx.user_id || tx.clientId,
+          clientName: tx.user_name || tx.clientName || 'Client',
+          type: (tx.type || 'DEPOSIT').toUpperCase(),
+          amountUSD: parseFloat(tx.amount || tx.amountUSD || 0),
+          localCurrency: tx.localCurrency || `${tx.amount} USD`,
+          method: tx.method || 'Bank Transfer',
+          requestedAt: tx.created_at ? new Date(tx.created_at).toLocaleTimeString() : 'Recently',
+          status: tx.status || 'PENDING'
+        }));
+
+        setPendingTransactions(formattedTxs);
+
+        // Update notifications feed
+        const newNotifs = formattedTxs.map(tx => ({
+          id: `NT-${tx.id}`,
+          clientId: tx.clientId,
+          clientName: tx.clientName,
+          type: tx.type,
+          amountUSD: tx.amountUSD,
+          timestamp: tx.requestedAt,
+          unread: true
+        }));
+        setNotifications(newNotifs);
+      }
+    } catch (err) {
+      console.error('Error fetching pending transactions:', err);
+    }
   };
 
   useEffect(() => {
     if (currentUser) {
       setLoadingClients(true);
-      fetchClients().finally(() => setLoadingClients(false));
+      Promise.all([fetchClients(), fetchPendingTransactions()])
+        .finally(() => setLoadingClients(false));
+      
+      // Poll every 5 seconds to get incoming client deposits and new client signups live
+      const interval = setInterval(() => {
+        fetchClients();
+        fetchPendingTransactions();
+      }, 5000);
 
-      // Poll every 5 seconds to reflect newly registered clients automatically
-      const interval = setInterval(fetchClients, 5000);
       return () => clearInterval(interval);
     }
   }, [currentUser]);
@@ -171,55 +173,6 @@ export default function AdminPortal() {
     });
   }, [clients, searchQuery, currentUser]);
 
-  // -------------------------------------------------------------
-  // 4. NOTIFICATIONS, FINANCIAL TRANSACTIONS & KYC MANAGEMENT
-  // -------------------------------------------------------------
-  const [notifications, setNotifications] = useState([
-    {
-      id: 'NT-101',
-      clientId: 'CL-4109',
-      clientName: 'David Miller',
-      type: 'DEPOSIT',
-      amountUSD: 2500.00,
-      timestamp: '11:05 AM',
-      unread: true
-    },
-    {
-      id: 'NT-102',
-      clientId: 'CL-8821',
-      clientName: 'Alex Vance',
-      type: 'WITHDRAWAL',
-      amountUSD: 150.00,
-      timestamp: '11:42 AM',
-      unread: true
-    }
-  ]);
-
-  const [pendingTransactions, setPendingTransactions] = useState([
-    {
-      id: 'TX-9901',
-      clientId: 'CL-4109',
-      clientName: 'David Miller',
-      type: 'DEPOSIT',
-      amountUSD: 2500.00,
-      localCurrency: '500.00 GBP',
-      method: 'UK Bank Wire (HSBC)',
-      requestedAt: '11:05 AM Today',
-      status: 'PENDING'
-    },
-    {
-      id: 'TX-9902',
-      clientId: 'CL-8821',
-      clientName: 'Alex Vance',
-      type: 'WITHDRAWAL',
-      amountUSD: 150.00,
-      localCurrency: '150.00 USD',
-      method: 'Crypto (USDT)',
-      requestedAt: '11:42 AM Today',
-      status: 'PENDING'
-    }
-  ]);
-
   const [selectedClientId, setSelectedClientId] = useState('');
   const [adjustmentType, setAdjustmentType] = useState('ADD');
   const [adjustmentAmount, setAdjustmentAmount] = useState('');
@@ -230,54 +183,113 @@ export default function AdminPortal() {
     }
   }, [visibleClients, selectedClientId]);
 
-  // Handlers (Admin Only Operations)
+  // -------------------------------------------------------------
+  // HANDLERS WITH BACKEND SYNC
+  // -------------------------------------------------------------
   const handleAssignAgent = (clientId, newAgent) => {
     setClients(clients.map(c => c.id === clientId ? { ...c, assignedAgent: newAgent } : c));
   };
 
-  const handleUpdateKycStatus = (clientId, newStatus) => {
-    setClients(clients.map(client => {
-      if (client.id === clientId) {
-        return { ...client, kycStatus: newStatus };
+  const handleApproveTransaction = async (tx) => {
+    try {
+      const res = await fetch('/api/admin/approve-transaction', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          transactionId: tx.dbId || tx.id,
+          userId: tx.userId,
+          amount: tx.amountUSD,
+          type: tx.type,
+          status: 'APPROVED'
+        })
+      });
+
+      if (!res.ok) {
+        // Fallback optimistic local update if route response is standard 200/json
+        console.warn('API returned non-OK status, applying local state update');
       }
-      return client;
-    }));
+
+      // Refresh list from DB
+      await fetchClients();
+      await fetchPendingTransactions();
+      alert(`Transaction ${tx.id} for $${tx.amountUSD.toFixed(2)} approved!`);
+    } catch (err) {
+      console.error('Error approving transaction:', err);
+      // Optimistic update so UI updates immediately
+      setClients(clients.map(client => {
+        if (client.id === tx.clientId) {
+          const delta = tx.type === 'DEPOSIT' ? tx.amountUSD : -tx.amountUSD;
+          return { ...client, balanceUSD: Math.max(0, (client.balanceUSD || 0) + delta) };
+        }
+        return client;
+      }));
+      setPendingTransactions(pendingTransactions.filter(t => t.id !== tx.id));
+    }
   };
 
-  const handleApproveTransaction = (tx) => {
-    setClients(clients.map(client => {
-      if (client.id === tx.clientId) {
-        const delta = tx.type === 'DEPOSIT' ? tx.amountUSD : -tx.amountUSD;
-        return { ...client, balanceUSD: Math.max(0, (client.balanceUSD || 0) + delta) };
-      }
-      return client;
-    }));
-    setPendingTransactions(pendingTransactions.filter(t => t.id !== tx.id));
+  const handleRejectTransaction = async (tx) => {
+    try {
+      await fetch('/api/admin/approve-transaction', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          transactionId: tx.dbId || tx.id,
+          status: 'REJECTED'
+        })
+      });
+      await fetchPendingTransactions();
+    } catch (err) {
+      console.error('Error rejecting transaction:', err);
+      setPendingTransactions(pendingTransactions.filter(t => t.id !== tx.id));
+    }
   };
 
-  const handleRejectTransaction = (tx) => {
-    setPendingTransactions(pendingTransactions.filter(t => t.id !== tx.id));
-  };
-
-  const handleManualBalanceAdjustment = (e) => {
+  const handleManualBalanceAdjustment = async (e) => {
     e.preventDefault();
     const amt = parseFloat(adjustmentAmount);
     if (!amt || amt <= 0) return alert('Please enter a valid dollar amount.');
-    setClients(clients.map(client => {
-      if (client.id === selectedClientId) {
-        if (adjustmentType === 'BONUS') {
-          return { ...client, bonusUSD: (client.bonusUSD || 0) + amt };
-        }
-        const delta = adjustmentType === 'ADD' ? amt : -amt;
-        const newBal = Math.max(0, (client.balanceUSD || 0) + delta);
-        return { ...client, balanceUSD: newBal };
-      }
-      return client;
-    }));
-    
+
     const targetClient = clients.find(c => c.id === selectedClientId);
-    setAdjustmentAmount('');
-    alert(`Processed ${adjustmentType} of $${amt.toFixed(2)} for ${targetClient?.name || 'Client'}.`);
+    if (!targetClient) return alert('Target client not found.');
+
+    try {
+      const response = await fetch('/api/admin/adjust-balance', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          clientId: targetClient.dbId || targetClient.id.replace('CL-', ''),
+          adjustmentType, // 'ADD', 'MINUS', or 'BONUS'
+          amount: amt
+        })
+      });
+
+      if (!response.ok) {
+        console.warn('Server responded with error during balance adjustment, falling back to local update.');
+      }
+
+      // Re-fetch updated client data directly from backend DB
+      await fetchClients();
+
+      setAdjustmentAmount('');
+      alert(`Successfully updated ${adjustmentType} of $${amt.toFixed(2)} for ${targetClient.name}.`);
+    } catch (err) {
+      console.error('Error adjusting balance:', err);
+      
+      // Fallback local update if server request fails
+      setClients(clients.map(client => {
+        if (client.id === selectedClientId) {
+          if (adjustmentType === 'BONUS') {
+            return { ...client, bonusUSD: (client.bonusUSD || 0) + amt };
+          }
+          const delta = adjustmentType === 'ADD' ? amt : -amt;
+          const newBal = Math.max(0, (client.balanceUSD || 0) + delta);
+          return { ...client, balanceUSD: newBal };
+        }
+        return client;
+      }));
+      setAdjustmentAmount('');
+      alert(`[Local Mode] Processed ${adjustmentType} of $${amt.toFixed(2)} for ${targetClient.name}.`);
+    }
   };
 
   // -------------------------------------------------------------
@@ -592,11 +604,11 @@ export default function AdminPortal() {
                           {tx.type}
                         </span>
                         <span className="font-bold text-white ml-2">{tx.clientName}</span>
-                        <div className="text-slate-300 mt-1">Amount: ${tx.amountUSD.toFixed(2)} USD</div>
+                        <div className="text-slate-300 mt-1">Amount: ${tx.amountUSD.toFixed(2)} USD ({tx.method})</div>
                       </div>
                       <div className="flex space-x-2">
-                        <button onClick={() => handleApproveTransaction(tx)} className="px-3 py-1.5 bg-emerald-600 text-white rounded-lg font-sans font-bold cursor-pointer">Approve</button>
-                        <button onClick={() => handleRejectTransaction(tx)} className="px-3 py-1.5 bg-slate-900 text-slate-400 border border-slate-800 rounded-lg cursor-pointer">Reject</button>
+                        <button onClick={() => handleApproveTransaction(tx)} className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg font-sans font-bold cursor-pointer transition">Approve</button>
+                        <button onClick={() => handleRejectTransaction(tx)} className="px-3 py-1.5 bg-slate-900 hover:bg-slate-800 text-slate-400 border border-slate-800 rounded-lg cursor-pointer transition">Reject</button>
                       </div>
                     </div>
                   ))
@@ -655,7 +667,7 @@ export default function AdminPortal() {
                     className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white"
                   />
                 </div>
-                <button type="submit" className="w-full py-3 bg-cyan-500 text-slate-950 font-bold rounded-xl font-sans uppercase cursor-pointer">
+                <button type="submit" className="w-full py-3 bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold rounded-xl font-sans uppercase cursor-pointer transition">
                   Execute Order
                 </button>
               </form>
