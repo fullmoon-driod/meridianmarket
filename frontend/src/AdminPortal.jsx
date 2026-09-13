@@ -5,22 +5,14 @@ import {
   Search, 
   LogOut, 
   Wallet, 
-  DollarSign,
-  Clock,
   Phone,
-  PhoneCall,
-  Bell,
-  Wifi,
-  WifiOff,
   LayoutDashboard,
   UserPlus,
   Calendar,
-  BarChart3,
   Lock,
-  Eye,
-  X,
   UserCheck,
-  Plus
+  Plus,
+  Globe
 } from 'lucide-react';
 
 export default function AdminPortal() {
@@ -45,27 +37,47 @@ export default function AdminPortal() {
     localStorage.setItem('meridian_crm_agents', JSON.stringify(agents));
   }, [agents]);
 
-  const handleLogin = (e) => {
+  const handleLogin = async (e) => {
     e.preventDefault();
     setLoginError('');
     
-    // Updated Primary Master Admin Credentials
-    if (loginEmail === 'klaus@meridianmarket.net' && loginPassword === 'Wizzy01@') {
-      const user = { name: 'Klaus Admin', email: loginEmail, role: 'ADMIN', agentId: 'ADMIN_01' };
+    const cleanedEmail = loginEmail.trim().toLowerCase();
+
+    // Primary Master Admin Credentials
+    if (cleanedEmail === 'klaus@meridianmarket.net' && loginPassword === 'Wizzy01@') {
+      const user = { name: 'Klaus Admin', email: cleanedEmail, role: 'ADMIN', agentId: 'ADMIN_01' };
       setCurrentUser(user);
       localStorage.setItem('meridian_crm_auth', JSON.stringify(user));
       return;
     }
     
-    // Agent Authentication Strategy
-    const matchedAgent = agents.find(ag => ag.email === loginEmail && ag.password === loginPassword);
+    // Check local agents (Fallback)
+    const matchedAgent = agents.find(ag => ag.email.trim().toLowerCase() === cleanedEmail && ag.password === loginPassword);
     if (matchedAgent) {
       const user = { name: matchedAgent.name, email: matchedAgent.email, role: 'AGENT', agentId: matchedAgent.name };
       setCurrentUser(user);
       localStorage.setItem('meridian_crm_auth', JSON.stringify(user));
       return;
     }
-    
+
+    // Backend Agent Authentication Check
+    try {
+      const res = await fetch('/api/admin/agent-login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: cleanedEmail, password: loginPassword })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        const user = { name: data.name, email: data.email, role: 'AGENT', agentId: data.name };
+        setCurrentUser(user);
+        localStorage.setItem('meridian_crm_auth', JSON.stringify(user));
+        return;
+      }
+    } catch (err) {
+      console.warn('Backend authentication failed, checking local credentials.', err);
+    }
+
     setLoginError('Invalid credentials. Check email and password.');
   };
 
@@ -79,11 +91,9 @@ export default function AdminPortal() {
   // -------------------------------------------------------------
   const [activeCrmTab, setActiveCrmTab] = useState('dashboard');
   const [searchQuery, setSearchQuery] = useState('');
-  const [showNotifications, setShowNotifications] = useState(false);
   const [statusFilter, setStatusFilter] = useState('ALL');
   const [kycFilter, setKycFilter] = useState('ALL');
   
-  // Real clients stored in state (Demo clients removed)
   const [clients, setClients] = useState(() => {
     const saved = localStorage.getItem('meridian_crm_clients');
     return saved ? JSON.parse(saved) : [];
@@ -93,7 +103,6 @@ export default function AdminPortal() {
     localStorage.setItem('meridian_crm_clients', JSON.stringify(clients));
   }, [clients]);
 
-  // Appointments State
   const [appointments, setAppointments] = useState(() => {
     const saved = localStorage.getItem('meridian_crm_appointments');
     return saved ? JSON.parse(saved) : [];
@@ -103,7 +112,6 @@ export default function AdminPortal() {
     localStorage.setItem('meridian_crm_appointments', JSON.stringify(appointments));
   }, [appointments]);
 
-  // Audit Logs State
   const [auditLogs, setAuditLogs] = useState(() => {
     const saved = localStorage.getItem('meridian_crm_audit');
     return saved ? JSON.parse(saved) : [
@@ -127,9 +135,8 @@ export default function AdminPortal() {
   };
 
   // -------------------------------------------------------------
-  // 3. LIVE BACKEND FETCHING WITH LOCAL FALLBACK
+  // 3. LIVE BACKEND FETCHING
   // -------------------------------------------------------------
-  const [loadingClients, setLoadingClients] = useState(false);
   const fetchClients = async () => {
     try {
       const response = await fetch('/api/admin/clients-detailed');
@@ -142,10 +149,10 @@ export default function AdminPortal() {
             dbId: c.id,
             name: c.full_name || c.name || 'Unknown',
             email: c.email || 'N/A',
-            phone: c.phone || 'N/A',
+            phone: c.phone || c.phone_number || 'N/A',
             ip: c.ip_address || c.ip || '127.0.0.1',
-            assignedAgent: c.agent_name || c.assignedAgent || 'Unassigned',
-            kycStatus: c.kycStatus || 'PENDING',
+            assignedAgent: c.assigned_agent || c.agent_name || c.assignedAgent || 'Unassigned',
+            kycStatus: c.kycStatus || c.kyc_status || 'PENDING',
             stage: c.stage || 'NEW_LEAD',
             balanceUSD: typeof c.balanceUSD === 'number' ? c.balanceUSD : parseFloat(c.balanceUSD || c.balance || 0),
             bonusUSD: typeof c.bonusUSD === 'number' ? c.bonusUSD : parseFloat(c.bonusUSD || c.bonus || 0),
@@ -162,78 +169,23 @@ export default function AdminPortal() {
     }
   };
 
-  // -------------------------------------------------------------
-  // 4. NOTIFICATIONS & PENDING TRANSACTIONS
-  // -------------------------------------------------------------
-  const [notifications, setNotifications] = useState([]);
-  const [pendingTransactions, setPendingTransactions] = useState(() => {
-    const saved = localStorage.getItem('meridian_crm_pending_txs');
-    return saved ? JSON.parse(saved) : [];
-  });
-
-  useEffect(() => {
-    localStorage.setItem('meridian_crm_pending_txs', JSON.stringify(pendingTransactions));
-  }, [pendingTransactions]);
-
-  const fetchPendingTransactions = async () => {
-    try {
-      const response = await fetch('/api/admin/pending-transactions');
-      if (response.ok) {
-        const data = await response.json();
-        const txs = Array.isArray(data) ? data : (data.transactions || []);
-        
-        const formattedTxs = txs.map(tx => ({
-          id: tx.id || `TX-${tx.id}`,
-          dbId: tx.id,
-          clientId: `CL-${tx.user_id || tx.clientId}`,
-          userId: tx.user_id || tx.clientId,
-          clientName: tx.user_name || tx.clientName || 'Client',
-          type: (tx.type || 'DEPOSIT').toUpperCase(),
-          amountUSD: parseFloat(tx.amount || tx.amountUSD || 0),
-          localCurrency: tx.localCurrency || `${tx.amount} USD`,
-          method: tx.method || 'Bank Transfer',
-          requestedAt: tx.created_at ? new Date(tx.created_at).toLocaleTimeString() : 'Recently',
-          status: tx.status || 'PENDING'
-        }));
-        setPendingTransactions(formattedTxs);
-        
-        const newNotifs = formattedTxs.map(tx => ({
-          id: `NT-${tx.id}`,
-          clientId: tx.clientId,
-          clientName: tx.clientName,
-          type: tx.type,
-          amountUSD: tx.amountUSD,
-          timestamp: tx.requestedAt,
-          unread: true
-        }));
-        setNotifications(newNotifs);
-      }
-    } catch (err) {
-      console.warn('Backend transactions route unavailable, operating in persistent mode.', err);
-    }
-  };
-
   useEffect(() => {
     if (currentUser) {
-      setLoadingClients(true);
-      Promise.all([fetchClients(), fetchPendingTransactions()])
-        .finally(() => setLoadingClients(false));
-      
+      fetchClients();
       const interval = setInterval(() => {
         fetchClients();
-        fetchPendingTransactions();
       }, 10000);
       return () => clearInterval(interval);
     }
   }, [currentUser]);
 
-  // Memoize visible clients according to role permissions & filters
   const visibleClients = useMemo(() => {
     return clients.filter(c => {
       const q = searchQuery.toLowerCase();
       const matchesSearch = 
         (c.name || '').toLowerCase().includes(q) ||
         (c.id || '').toLowerCase().includes(q) ||
+        (c.phone || '').toLowerCase().includes(q) ||
         (currentUser?.role === 'ADMIN' && (
           (c.email || '').toLowerCase().includes(q) ||
           (c.ip || '').toLowerCase().includes(q)
@@ -248,7 +200,6 @@ export default function AdminPortal() {
   }, [clients, searchQuery, statusFilter, kycFilter, currentUser]);
 
   const [selectedClientId, setSelectedClientId] = useState('');
-  const [selectedClientDetail, setSelectedClientDetail] = useState(null);
   const [adjustmentType, setAdjustmentType] = useState('ADD');
   const [adjustmentAmount, setAdjustmentAmount] = useState('');
 
@@ -259,25 +210,33 @@ export default function AdminPortal() {
   }, [visibleClients, selectedClientId]);
 
   // -------------------------------------------------------------
-  // HANDLERS WITH BACKEND SYNC & AUDIT LOGGING
+  // HANDLERS WITH BACKEND SYNC
   // -------------------------------------------------------------
-  const handleAssignAgent = (clientId, newAgent) => {
+  const handleAssignAgent = async (clientId, newAgent) => {
     if (currentUser.role !== 'ADMIN') {
       alert('Security Exception: Agents are unauthorized to assign accounts.');
       return;
     }
+
+    const targetClient = clients.find(c => c.id === clientId);
+
+    // Optimistic UI update
     setClients(clients.map(c => c.id === clientId ? { ...c, assignedAgent: newAgent } : c));
+
+    try {
+      await fetch('/api/admin/assign-agent', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          clientId: targetClient?.dbId || clientId.replace('CL-', ''),
+          assignedAgent: newAgent
+        })
+      });
+    } catch (err) {
+      console.warn('Backend sync failed for agent assignment.', err);
+    }
+
     addAuditLog('AGENT_REASSIGN', `Assigned client ${clientId} to ${newAgent}`);
-  };
-
-  const handleUpdateKycStatus = (clientId, newStatus) => {
-    setClients(clients.map(c => c.id === clientId ? { ...c, kycStatus: newStatus } : c));
-    addAuditLog('KYC_UPDATE', `Updated KYC status of ${clientId} to ${newStatus}`);
-  };
-
-  const handleUpdateStage = (clientId, newStage) => {
-    setClients(clients.map(c => c.id === clientId ? { ...c, stage: newStage } : c));
-    addAuditLog('CLIENT_STAGE_UPDATE', `Updated client ${clientId} lifecycle stage to ${newStage}`);
   };
 
   // AGENT CREATION BY ADMIN
@@ -285,7 +244,7 @@ export default function AdminPortal() {
   const [newAgentEmail, setNewAgentEmail] = useState('');
   const [newAgentPassword, setNewAgentPassword] = useState('');
 
-  const handleCreateAgent = (e) => {
+  const handleCreateAgent = async (e) => {
     e.preventDefault();
     if (currentUser.role !== 'ADMIN') return;
     if (!newAgentName || !newAgentEmail || !newAgentPassword) {
@@ -295,11 +254,23 @@ export default function AdminPortal() {
     const agentObj = {
       id: `AG-${Date.now()}`,
       name: newAgentName,
-      email: newAgentEmail,
+      email: newAgentEmail.trim().toLowerCase(),
       password: newAgentPassword,
       createdAt: new Date().toLocaleDateString()
     };
-    setAgents([...agents, agentObj]);
+
+    setAgents(prev => [...prev, agentObj]);
+
+    try {
+      await fetch('/api/admin/create-agent', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(agentObj)
+      });
+    } catch (err) {
+      console.warn('Backend sync unavailable for agent creation.', err);
+    }
+
     addAuditLog('AGENT_CREATED', `Created new agent ${newAgentName} (${newAgentEmail})`);
     setNewAgentName('');
     setNewAgentEmail('');
@@ -307,7 +278,7 @@ export default function AdminPortal() {
     alert(`Agent ${newAgentName} successfully created.`);
   };
 
-  // FIXED AUDITED BALANCE ADJUSTER
+  // AUDITED BALANCE ADJUSTER
   const handleManualBalanceAdjustment = async (e) => {
     e.preventDefault();
     if (currentUser.role !== 'ADMIN') {
@@ -319,21 +290,7 @@ export default function AdminPortal() {
     const targetClient = clients.find(c => c.id === selectedClientId);
     if (!targetClient) return alert('Target client not found.');
 
-    try {
-      await fetch('/api/admin/adjust-balance', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          clientId: targetClient.dbId || targetClient.id.replace('CL-', ''),
-          adjustmentType,
-          amount: amt
-        })
-      });
-    } catch (err) {
-      console.warn('Server sync unavailable, performing direct state balance adjustment.', err);
-    }
-
-    // Direct State Balance Sync
+    // Update UI Optimistically
     setClients(prevClients => prevClients.map(client => {
       if (client.id === selectedClientId) {
         const currentBal = parseFloat(client.balanceUSD || 0);
@@ -350,109 +307,23 @@ export default function AdminPortal() {
       return client;
     }));
 
+    try {
+      await fetch('/api/admin/adjust-balance', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          clientId: targetClient.dbId || targetClient.id.replace('CL-', ''),
+          adjustmentType,
+          amount: amt
+        })
+      });
+    } catch (err) {
+      console.warn('Server sync unavailable, performing direct state balance adjustment.', err);
+    }
+
     addAuditLog('BALANCE_ADJUSTED', `Applied ${adjustmentType} of $${amt.toFixed(2)} to ${targetClient.name}`);
     setAdjustmentAmount('');
     alert(`Successfully applied ${adjustmentType} of $${amt.toFixed(2)} to ${targetClient.name}.`);
-  };
-
-  // REGISTER CLIENT FORM
-  const [newClientName, setNewClientName] = useState('');
-  const [newClientEmail, setNewClientEmail] = useState('');
-  const [newClientPhone, setNewClientPhone] = useState('');
-  const [newClientAgent, setNewClientAgent] = useState('Unassigned');
-
-  const handleRegisterClient = (e) => {
-    e.preventDefault();
-    if (!newClientName) return alert('Enter client name.');
-    
-    const newId = `CL-${Math.floor(1000 + Math.random() * 9000)}`;
-    const newClient = {
-      id: newId,
-      dbId: Date.now(),
-      name: newClientName,
-      email: newClientEmail,
-      phone: newClientPhone,
-      ip: '127.0.0.1',
-      assignedAgent: newClientAgent,
-      kycStatus: 'PENDING',
-      stage: 'NEW_LEAD',
-      balanceUSD: 0.00,
-      bonusUSD: 0.00,
-      isOnline: true,
-      callNotes: [`[SYSTEM] Account registered by ${currentUser.name}`],
-      createdAt: new Date().toISOString().split('T')[0],
-      lastContact: new Date().toISOString().split('T')[0]
-    };
-
-    setClients([newClient, ...clients]);
-    addAuditLog('CLIENT_REGISTERED', `Registered new client ${newClient.name} (${newId})`);
-    setNewClientName('');
-    setNewClientEmail('');
-    setNewClientPhone('');
-    alert(`Client ${newClient.name} registered successfully.`);
-  };
-
-  // APPOINTMENTS
-  const [aptClient, setAptClient] = useState('');
-  const [aptDate, setAptDate] = useState('');
-  const [aptTime, setAptTime] = useState('');
-  const [aptNote, setAptNote] = useState('');
-
-  const handleCreateAppointment = (e) => {
-    e.preventDefault();
-    if (!aptClient || !aptDate || !aptTime) return alert('Fill in all appointment details.');
-    const client = clients.find(c => c.id === aptClient);
-    const newApt = {
-      id: `APT-${Date.now()}`,
-      clientId: aptClient,
-      clientName: client ? client.name : 'Client',
-      agent: currentUser.name,
-      date: aptDate,
-      time: aptTime,
-      note: aptNote || 'Consultation'
-    };
-    setAppointments([newApt, ...appointments]);
-    addAuditLog('APPOINTMENT_CREATED', `Booked session for ${newApt.clientName} on ${aptDate}`);
-    setAptClient('');
-    setAptDate('');
-    setAptTime('');
-    setAptNote('');
-    alert('Appointment booked successfully.');
-  };
-
-  // CALL CENTER
-  const [activeCallClient, setActiveCallClient] = useState(null);
-  const [callStatus, setCallStatus] = useState('IDLE');
-  const [newNote, setNewNote] = useState('');
-
-  const startCall = (client) => {
-    setActiveCallClient(client);
-    setCallStatus('CALLING');
-    addAuditLog('CALL_INITIATED', `Dialed ${client.name}`);
-    setTimeout(() => setCallStatus('CONNECTED'), 1500);
-  };
-
-  const endCall = () => {
-    setCallStatus('IDLE');
-    setActiveCallClient(null);
-  };
-
-  const handleAddCallNote = (e) => {
-    e.preventDefault();
-    if (!newNote.trim() || !activeCallClient) return;
-    const noteText = `[${new Date().toLocaleTimeString()}] (${currentUser.name}): ${newNote}`;
-    
-    setClients(clients.map(c => {
-      if (c.id === activeCallClient.id) {
-        return { ...c, callNotes: [noteText, ...(c.callNotes || [])] };
-      }
-      return c;
-    }));
-    setActiveCallClient({
-      ...activeCallClient,
-      callNotes: [noteText, ...(activeCallClient.callNotes || [])]
-    });
-    setNewNote('');
   };
 
   const metrics = useMemo(() => {
@@ -468,7 +339,6 @@ export default function AdminPortal() {
     };
   }, [clients]);
 
-  // LOGIN SCREEN
   if (!currentUser) {
     return (
       <div className="min-h-screen bg-[#06080d] text-slate-100 flex items-center justify-center p-4 font-sans">
@@ -520,10 +390,8 @@ export default function AdminPortal() {
     );
   }
 
-  // MAIN CRM WORKSPACE
   return (
     <div className="min-h-screen bg-[#06080d] text-slate-100 font-sans flex flex-col">
-      {/* HEADER */}
       <header className="bg-slate-950 border-b border-slate-800 px-8 py-5 flex justify-between items-center sticky top-0 z-40">
         <div className="flex items-center space-x-3">
           <div className="p-2 bg-slate-900 border border-slate-800 rounded-xl">
@@ -541,18 +409,16 @@ export default function AdminPortal() {
             </p>
           </div>
         </div>
-        <div className="flex items-center space-x-4">
-          <button 
-            onClick={handleLogout} 
-            className="px-4 py-2 bg-slate-900 border border-slate-800 hover:border-slate-700 text-xs text-slate-300 rounded-xl font-mono flex items-center space-x-2 transition cursor-pointer"
-          >
-            <LogOut className="w-3.5 h-3.5 text-slate-400" />
-            <span>Sign Out</span>
-          </button>
-        </div>
+        <button 
+          onClick={handleLogout} 
+          className="px-4 py-2 bg-slate-900 border border-slate-800 hover:border-slate-700 text-xs text-slate-300 rounded-xl font-mono flex items-center space-x-2 transition cursor-pointer"
+        >
+          <LogOut className="w-3.5 h-3.5 text-slate-400" />
+          <span>Sign Out</span>
+        </button>
       </header>
 
-      {/* TABS */}
+      {/* MAIN NAVIGATION */}
       <div className="bg-slate-950/60 border-b border-slate-800/80 px-8 py-3">
         <div className="max-w-7xl mx-auto flex flex-wrap gap-2 font-mono text-xs">
           <button
@@ -564,7 +430,6 @@ export default function AdminPortal() {
             <LayoutDashboard className="w-4 h-4" />
             <span>Dashboard</span>
           </button>
-
           <button
             onClick={() => setActiveCrmTab('clients')}
             className={`px-4 py-2 rounded-xl border font-bold transition flex items-center space-x-2 cursor-pointer ${
@@ -574,7 +439,6 @@ export default function AdminPortal() {
             <Users className="w-4 h-4" />
             <span>Clients ({visibleClients.length})</span>
           </button>
-
           {currentUser.role === 'ADMIN' && (
             <button
               onClick={() => setActiveCrmTab('agents')}
@@ -586,27 +450,6 @@ export default function AdminPortal() {
               <span>Manage Agents ({agents.length})</span>
             </button>
           )}
-
-          <button
-            onClick={() => setActiveCrmTab('registration')}
-            className={`px-4 py-2 rounded-xl border font-bold transition flex items-center space-x-2 cursor-pointer ${
-              activeCrmTab === 'registration' ? 'bg-cyan-500/10 border-cyan-500/80 text-cyan-400' : 'bg-slate-900/40 border-slate-800 text-slate-400 hover:text-white'
-            }`}
-          >
-            <UserPlus className="w-4 h-4" />
-            <span>Register Client</span>
-          </button>
-
-          <button
-            onClick={() => setActiveCrmTab('appointments')}
-            className={`px-4 py-2 rounded-xl border font-bold transition flex items-center space-x-2 cursor-pointer ${
-              activeCrmTab === 'appointments' ? 'bg-cyan-500/10 border-cyan-500/80 text-cyan-400' : 'bg-slate-900/40 border-slate-800 text-slate-400 hover:text-white'
-            }`}
-          >
-            <Calendar className="w-4 h-4" />
-            <span>Appointments ({appointments.length})</span>
-          </button>
-
           {currentUser.role === 'ADMIN' && (
             <button
               onClick={() => setActiveCrmTab('financial_ops')}
@@ -618,24 +461,10 @@ export default function AdminPortal() {
               <span>Financial Adjustments</span>
             </button>
           )}
-
-          {currentUser.role === 'ADMIN' && (
-            <button
-              onClick={() => setActiveCrmTab('audit')}
-              className={`px-4 py-2 rounded-xl border font-bold transition flex items-center space-x-2 cursor-pointer ${
-                activeCrmTab === 'audit' ? 'bg-cyan-500/10 border-cyan-500/80 text-cyan-400' : 'bg-slate-900/40 border-slate-800 text-slate-400 hover:text-white'
-              }`}
-            >
-              <Lock className="w-4 h-4 text-amber-400" />
-              <span>Audit Log</span>
-            </button>
-          )}
         </div>
       </div>
 
-      {/* CONTENT WORKSPACE */}
       <main className="flex-1 max-w-7xl w-full mx-auto p-8 space-y-6">
-        {/* DASHBOARD */}
         {activeCrmTab === 'dashboard' && (
           <div className="space-y-6 font-mono">
             <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
@@ -675,17 +504,16 @@ export default function AdminPortal() {
               </div>
               <div>Displaying {visibleClients.length} real accounts</div>
             </div>
-
             <div className="bg-slate-900/40 border border-slate-800 rounded-2xl overflow-hidden font-mono text-xs">
               <table className="w-full text-left">
                 <thead>
                   <tr className="border-b border-slate-800 bg-slate-950/60 text-slate-400">
-                    <th className="py-4 px-6">Client</th>
+                    <th className="py-4 px-6">Client Details</th>
+                    <th className="py-4 px-6">Phone / IP</th>
                     <th className="py-4 px-6">Stage</th>
                     <th className="py-4 px-6">KYC</th>
                     <th className="py-4 px-6">Balance & Bonus</th>
                     <th className="py-4 px-6">Assigned Agent</th>
-                    <th className="py-4 px-6 text-right">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-800/50">
@@ -699,6 +527,17 @@ export default function AdminPortal() {
                         <td className="py-4 px-6">
                           <div className="font-bold text-white">{client.name}</div>
                           <div className="text-[10px] text-slate-500">{client.email}</div>
+                        </td>
+                        {/* ADDED PHONE NUMBER & IP ADDRESS DISPLAY */}
+                        <td className="py-4 px-6">
+                          <div className="text-white flex items-center gap-1">
+                            <Phone className="w-3 h-3 text-cyan-400 inline" />
+                            {client.phone}
+                          </div>
+                          <div className="text-[10px] text-slate-500 flex items-center gap-1 mt-0.5">
+                            <Globe className="w-3 h-3 text-slate-400 inline" />
+                            {client.ip}
+                          </div>
                         </td>
                         <td className="py-4 px-6">
                           <span className="px-2 py-1 bg-slate-950 border border-slate-800 rounded text-cyan-400 font-bold">{client.stage}</span>
@@ -728,10 +567,6 @@ export default function AdminPortal() {
                             <span>{client.assignedAgent || 'Unassigned'}</span>
                           )}
                         </td>
-                        <td className="py-4 px-6 text-right space-x-2">
-                          <button onClick={() => setSelectedClientDetail(client)} className="px-3 py-1 bg-slate-800 text-white rounded-lg">View</button>
-                          <button onClick={() => startCall(client)} className="px-3 py-1 bg-emerald-600/20 text-emerald-400 rounded-lg">Dial</button>
-                        </td>
                       </tr>
                     ))
                   )}
@@ -741,131 +576,7 @@ export default function AdminPortal() {
           </div>
         )}
 
-        {/* AGENTS MANAGEMENT TAB (ADMIN ONLY) */}
-        {activeCrmTab === 'agents' && currentUser.role === 'ADMIN' && (
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 font-mono text-xs">
-            <div className="bg-slate-900/40 border border-slate-800 rounded-2xl p-6 space-y-4">
-              <h2 className="text-sm font-bold text-white uppercase border-b border-slate-800 pb-2 flex items-center space-x-2">
-                <Plus className="w-4 h-4 text-cyan-400" />
-                <span>Create New Agent</span>
-              </h2>
-              <form onSubmit={handleCreateAgent} className="space-y-4">
-                <div>
-                  <label className="block text-slate-400 mb-1">Agent Full Name</label>
-                  <input 
-                    type="text" 
-                    required
-                    value={newAgentName}
-                    onChange={(e) => setNewAgentName(e.target.value)}
-                    placeholder="e.g. Sarah Jenkins"
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white"
-                  />
-                </div>
-                <div>
-                  <label className="block text-slate-400 mb-1">Agent Email</label>
-                  <input 
-                    type="email" 
-                    required
-                    value={newAgentEmail}
-                    onChange={(e) => setNewAgentEmail(e.target.value)}
-                    placeholder="sarah@meridianmarket.net"
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white"
-                  />
-                </div>
-                <div>
-                  <label className="block text-slate-400 mb-1">Password</label>
-                  <input 
-                    type="password" 
-                    required
-                    value={newAgentPassword}
-                    onChange={(e) => setNewAgentPassword(e.target.value)}
-                    placeholder="••••••••"
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white"
-                  />
-                </div>
-                <button type="submit" className="w-full py-3 bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold rounded-xl uppercase">
-                  Add Agent
-                </button>
-              </form>
-            </div>
-
-            <div className="lg:col-span-2 bg-slate-900/40 border border-slate-800 rounded-2xl p-6 space-y-4">
-              <h2 className="text-sm font-bold text-white uppercase border-b border-slate-800 pb-2">Active Agents List</h2>
-              {agents.length === 0 ? (
-                <div className="text-slate-500 py-4">No custom agents added yet.</div>
-              ) : (
-                <div className="space-y-2">
-                  {agents.map(ag => (
-                    <div key={ag.id} className="p-3 bg-slate-950 border border-slate-800 rounded-xl flex justify-between items-center">
-                      <div>
-                        <div className="font-bold text-white">{ag.name}</div>
-                        <div className="text-slate-400">{ag.email}</div>
-                      </div>
-                      <div className="text-cyan-400 text-[10px]">Added: {ag.createdAt}</div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          </div>
-        )}
-
-        {/* REGISTER CLIENT TAB */}
-        {activeCrmTab === 'registration' && (
-          <div className="max-w-md mx-auto bg-slate-900/40 border border-slate-800 rounded-2xl p-6 space-y-4 font-mono text-xs">
-            <h2 className="text-sm font-bold text-white uppercase border-b border-slate-800 pb-2">Register Real Client</h2>
-            <form onSubmit={handleRegisterClient} className="space-y-4">
-              <div>
-                <label className="block text-slate-400 mb-1">Full Name</label>
-                <input 
-                  type="text" 
-                  required
-                  value={newClientName}
-                  onChange={(e) => setNewClientName(e.target.value)}
-                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white"
-                />
-              </div>
-              <div>
-                <label className="block text-slate-400 mb-1">Email</label>
-                <input 
-                  type="email" 
-                  required
-                  value={newClientEmail}
-                  onChange={(e) => setNewClientEmail(e.target.value)}
-                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white"
-                />
-              </div>
-              <div>
-                <label className="block text-slate-400 mb-1">Phone</label>
-                <input 
-                  type="text" 
-                  required
-                  value={newClientPhone}
-                  onChange={(e) => setNewClientPhone(e.target.value)}
-                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white"
-                />
-              </div>
-              {currentUser.role === 'ADMIN' && (
-                <div>
-                  <label className="block text-slate-400 mb-1">Assign Agent</label>
-                  <select 
-                    value={newClientAgent} 
-                    onChange={(e) => setNewClientAgent(e.target.value)}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white"
-                  >
-                    <option value="Unassigned">Unassigned</option>
-                    {agents.map(ag => <option key={ag.id} value={ag.name}>{ag.name}</option>)}
-                  </select>
-                </div>
-              )}
-              <button type="submit" className="w-full py-3 bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold rounded-xl uppercase">
-                Save Client
-              </button>
-            </form>
-          </div>
-        )}
-
-        {/* FINANCIAL OPS TAB (FIXED BALANCE ADJUSTMENT) */}
+        {/* FINANCIAL OPS TAB */}
         {activeCrmTab === 'financial_ops' && currentUser.role === 'ADMIN' && (
           <div className="max-w-md mx-auto bg-slate-900/40 border border-slate-800 rounded-2xl p-6 space-y-4 font-mono text-xs">
             <h2 className="text-sm font-bold text-white uppercase border-b border-slate-800 pb-2">Manual Balance Adjustment</h2>
@@ -921,24 +632,6 @@ export default function AdminPortal() {
                 Execute Adjustment
               </button>
             </form>
-          </div>
-        )}
-
-        {/* AUDIT LOG TAB */}
-        {activeCrmTab === 'audit' && currentUser.role === 'ADMIN' && (
-          <div className="bg-slate-900/40 border border-slate-800 rounded-2xl p-6 space-y-4 font-mono text-xs">
-            <h2 className="text-xs font-bold text-white uppercase border-b border-slate-800 pb-2">Audit Logs</h2>
-            <div className="space-y-2 max-h-96 overflow-y-auto">
-              {auditLogs.map(log => (
-                <div key={log.id} className="p-3 bg-slate-950 border border-slate-800 rounded-xl flex justify-between">
-                  <div>
-                    <span className="text-cyan-400 font-bold">[{log.action}]</span>
-                    <span className="text-white ml-2">{log.details}</span>
-                  </div>
-                  <div className="text-[10px] text-slate-500">{log.timestamp}</div>
-                </div>
-              ))}
-            </div>
           </div>
         )}
       </main>
