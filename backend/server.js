@@ -121,38 +121,52 @@ function initDatabase() {
 
 function logClientActivity(clientId, actionType, details = {}) {
   if (!clientId) return;
+  const numericId = parseInt(String(clientId).replace('CL-', ''), 10);
+  if (isNaN(numericId)) return;
+
   db.run(
     `INSERT INTO client_logs (client_id, action_type, details) VALUES (?, ?, ?)`,
-    [clientId, actionType, JSON.stringify(details)],
+    [numericId, actionType, JSON.stringify(details)],
     (err) => { if (err) console.error('Activity Log Error:', err.message); }
   );
 }
 
 // Helper to push balance updates over WebSocket
 function broadcastBalanceUpdate(clientId) {
-  db.get(`SELECT balance, bonus FROM clients WHERE id = ?`, [clientId], (err, row) => {
+  const numericId = parseInt(String(clientId).replace('CL-', ''), 10);
+  if (isNaN(numericId)) {
+    console.error(`Invalid clientId passed to broadcastBalanceUpdate: ${clientId}`);
+    return;
+  }
+
+  db.get(`SELECT balance, bonus FROM clients WHERE id = ?`, [numericId], (err, row) => {
     if (!err && row) {
       const payload = JSON.stringify({
         type: 'BALANCE_UPDATE',
-        clientId: clientId,
+        clientId: numericId,
         balance: row.balance,
         bonus: row.bonus
       });
+
       wss.clients.forEach((client) => {
         if (client.readyState === WebSocket.OPEN) {
           client.send(payload);
         }
       });
+    } else if (err) {
+      console.error('Error broadcasting balance update:', err.message);
     }
   });
 }
 
 // --- AUTHENTICATION & CLIENT ENDPOINTS ---
+
 app.post('/api/register', (req, res) => {
   const { fullName, email, phone, password } = req.body;
   if (!fullName || !email || !phone || !password) {
     return res.status(400).json({ error: 'All fields are required.' });
   }
+
   const normalizedEmail = email.toLowerCase().trim();
   const clientIp = req.headers['x-forwarded-for']?.split(',')[0] || req.socket.remoteAddress || '127.0.0.1';
 
@@ -170,8 +184,10 @@ app.post('/api/register', (req, res) => {
           }
           return res.status(500).json({ error: `Registration Failed: ${dbErr.message}` });
         }
+
         const newClientId = this.lastID;
         logClientActivity(newClientId, 'ACCOUNT_CREATED', { fullName, email: normalizedEmail, phone, ip_address: clientIp });
+
         return res.json({
           success: true,
           client: {
@@ -194,11 +210,12 @@ app.post('/api/login', (req, res) => {
 
   db.get(
     `SELECT id, full_name, email, phone, balance, bonus, agent_id FROM clients WHERE LOWER(email) = ? AND password = ?`,
-    [email.toLowerCase().trim(), password],
+    [email.toLowerCase().trim(), password.trim()],
     (err, client) => {
       if (err || !client) {
         return res.status(401).json({ error: 'Invalid email or password.' });
       }
+
       logClientActivity(client.id, 'CLIENT_LOGIN', { timestamp: new Date() });
       return res.json({ success: true, client });
     }
@@ -207,7 +224,10 @@ app.post('/api/login', (req, res) => {
 
 // Fetch latest client profile & live balance
 app.get('/api/client/profile/:clientId', (req, res) => {
-  const { clientId } = req.params;
+  const rawId = req.params.clientId;
+  const clientId = parseInt(String(rawId).replace('CL-', ''), 10);
+  if (isNaN(clientId)) return res.status(400).json({ error: 'Invalid client ID.' });
+
   db.get(`SELECT id, full_name, email, phone, balance, bonus, agent_id FROM clients WHERE id = ?`, [clientId], (err, client) => {
     if (err || !client) return res.status(404).json({ error: 'Client not found.' });
     return res.json({ success: true, client });
@@ -215,6 +235,7 @@ app.get('/api/client/profile/:clientId', (req, res) => {
 });
 
 // --- ADMIN & CRM ENDPOINTS ---
+
 app.get('/api/admin/clients-detailed', (req, res) => {
   const query = `
     SELECT c.id, c.full_name, c.email, c.phone, c.password, c.balance, c.bonus, c.ip_address, c.created_at, c.agent_id, a.name as agent_name
@@ -236,7 +257,6 @@ app.post('/api/admin/assign-agent', (req, res) => {
     return res.status(400).json({ error: 'Invalid Client ID provided.' });
   }
 
-  // Handle assignment by Agent Name or Agent ID
   if (agentId) {
     db.run(`UPDATE clients SET agent_id = ? WHERE id = ?`, [agentId, rawId], function(err) {
       if (err) return res.status(500).json({ error: 'Failed to assign agent.' });
@@ -271,10 +291,13 @@ app.post('/api/admin/create-agent', (req, res) => {
   if (!name || !email || !password) {
     return res.status(400).json({ error: 'Agent name, email, and password are required.' });
   }
+
   const cleanEmail = email.toLowerCase().trim();
+  const cleanPassword = password.trim();
+
   db.run(
     `INSERT INTO crm_agents (name, email, password, role) VALUES (?, ?, ?, ?)`,
-    [name, cleanEmail, password, role || 'AGENT'],
+    [name.trim(), cleanEmail, cleanPassword, role || 'AGENT'],
     function (err) {
       if (err) {
         if (err.message.includes('UNIQUE constraint failed')) {
@@ -282,25 +305,43 @@ app.post('/api/admin/create-agent', (req, res) => {
         }
         return res.status(500).json({ error: 'Failed to create agent.' });
       }
-      return res.json({ success: true, agent: { id: this.lastID, name, email: cleanEmail, role: role || 'AGENT' } });
+      return res.json({ success: true, agent: { id: this.lastID, name: name.trim(), email: cleanEmail, role: role || 'AGENT' } });
     }
   );
 });
 
-// AGENT LOGIN ENDPOINT
-app.post('/api/admin/agent-login', (req, res) => {
+// SHARED AGENT LOGIN HANDLER
+const handleAgentLogin = (req, res) => {
   const { email, password } = req.body;
-  if (!email || !password) return res.status(400).json({ error: 'Email and password required.' });
+  if (!email || !password) {
+    return res.status(400).json({ error: 'Email and password are required.' });
+  }
+
+  const cleanEmail = email.toLowerCase().trim();
+  const cleanPassword = password.trim();
 
   db.get(
     `SELECT id, name, email, role FROM crm_agents WHERE LOWER(email) = ? AND password = ?`,
-    [email.toLowerCase().trim(), password],
+    [cleanEmail, cleanPassword],
     (err, agent) => {
-      if (err || !agent) return res.status(401).json({ error: 'Invalid agent credentials.' });
-      return res.json({ success: true, ...agent });
+      if (err) {
+        console.error('Agent Login Error:', err.message);
+        return res.status(500).json({ error: 'Database error occurred during login.' });
+      }
+      if (!agent) {
+        console.warn(`Failed agent login attempt for email: ${cleanEmail}`);
+        return res.status(401).json({ error: 'Invalid agent credentials.' });
+      }
+
+      console.log(`Agent logged in successfully: ${agent.email}`);
+      return res.json({ success: true, agent });
     }
   );
-});
+};
+
+// Route aliases covering CRM and Admin logins
+app.post('/api/admin/agent-login', handleAgentLogin);
+app.post('/api/crm/agent/login', handleAgentLogin);
 
 app.get('/api/admin/pending-transactions', (req, res) => {
   const query = `
@@ -330,10 +371,11 @@ app.get('/api/admin/pending-transactions', (req, res) => {
 });
 
 app.post('/api/admin/approve-transaction', (req, res) => {
-  const { transactionId, status } = req.body; // status: 'APPROVED' or 'REJECTED'
+  const { transactionId, status } = req.body;
   if (!transactionId || !['APPROVED', 'REJECTED'].includes(status)) {
     return res.status(400).json({ error: 'Invalid transaction approval parameters.' });
   }
+
   db.get(`SELECT * FROM transactions WHERE id = ?`, [transactionId], (err, tx) => {
     if (err || !tx) return res.status(404).json({ error: 'Transaction not found.' });
     if (tx.status !== 'PENDING') return res.status(400).json({ error: 'Transaction already processed.' });
@@ -347,6 +389,7 @@ app.post('/api/admin/approve-transaction', (req, res) => {
           if (!balErr) broadcastBalanceUpdate(tx.client_id);
         });
       }
+
       logClientActivity(tx.client_id, `TRANSACTION_${status}`, { transactionId, amount: tx.amount, type: tx.type });
       return res.json({ success: true, message: `Transaction ${status.toLowerCase()} successfully.` });
     });
@@ -367,6 +410,7 @@ const handleBalanceAdjustment = (req, res) => {
   if (rawType === 'BONUS') {
     db.run(`UPDATE clients SET bonus = MAX(0, bonus + ?) WHERE id = ?`, [amount, clientId], function (err) {
       if (err) return res.status(500).json({ error: 'Failed to update bonus balance.' });
+
       db.run(
         `INSERT INTO transactions (client_id, type, amount, status, method) VALUES (?, 'BONUS', ?, 'APPROVED', 'ADMIN_BONUS')`,
         [clientId, amount]
@@ -378,8 +422,10 @@ const handleBalanceAdjustment = (req, res) => {
   } else {
     const isDeduction = rawType === 'DEDUCT' || rawType === 'MINUS';
     const adjustment = isDeduction ? -Math.abs(amount) : Math.abs(amount);
+
     db.run(`UPDATE clients SET balance = MAX(0, balance + ?) WHERE id = ?`, [adjustment, clientId], function (err) {
       if (err) return res.status(500).json({ error: 'Failed to update balance.' });
+
       db.run(
         `INSERT INTO transactions (client_id, type, amount, status, method) VALUES (?, ?, ?, 'APPROVED', 'ADMIN_ADJUSTMENT')`,
         [clientId, isDeduction ? 'DEBIT' : 'CREDIT', Math.abs(amount)]
@@ -395,33 +441,28 @@ app.post('/api/admin/update-balance', handleBalanceAdjustment);
 app.post('/api/admin/adjust-balance', handleBalanceAdjustment);
 
 // --- CASHIER ENDPOINTS ---
+
 app.post('/api/cashier/deposit', (req, res) => {
   const { amount, method, txHash, clientId, type } = req.body;
+  const rawId = parseInt(String(clientId).replace('CL-', ''), 10);
   const transactionType = (type || 'DEPOSIT').toUpperCase();
 
-  if (!clientId || !amount || isNaN(amount) || amount <= 0) {
+  if (isNaN(rawId) || !amount || isNaN(amount) || amount <= 0) {
     return res.status(400).json({ error: 'Invalid transaction parameters.' });
   }
 
   db.run(
     `INSERT INTO transactions (client_id, type, amount, status, method, tx_hash) VALUES (?, ?, ?, 'PENDING', ?, ?)`,
-    [clientId, transactionType, parseFloat(amount), method || 'Crypto', txHash || 'N/A'],
+    [rawId, transactionType, parseFloat(amount), method || 'Crypto', txHash || 'N/A'],
     function (err) {
       if (err) return res.status(500).json({ error: 'Failed to record transaction.' });
-      logClientActivity(clientId, `${transactionType}_REQUESTED`, { amount, method, txHash });
+      logClientActivity(rawId, `${transactionType}_REQUESTED`, { amount, method, txHash });
       return res.json({ success: true, message: 'Request submitted for CRM approval.', transactionId: this.lastID });
     }
   );
 });
 
 // --- CRM & AGENT ENDPOINTS ---
-app.post('/api/crm/agent/login', (req, res) => {
-  const { email, password } = req.body;
-  db.get(`SELECT id, name, email, role FROM crm_agents WHERE LOWER(email) = ? AND password = ?`, [email.toLowerCase().trim(), password], (err, agent) => {
-    if (err || !agent) return res.status(401).json({ error: 'Invalid agent credentials.' });
-    return res.json({ success: true, agent });
-  });
-});
 
 app.get('/api/crm/agents', (req, res) => {
   db.all(`SELECT id, name, email, role FROM crm_agents`, [], (err, rows) => {
@@ -431,7 +472,10 @@ app.get('/api/crm/agents', (req, res) => {
 });
 
 app.get('/api/crm/client/:clientId/activity', (req, res) => {
-  const { clientId } = req.params;
+  const rawId = req.params.clientId;
+  const clientId = parseInt(String(rawId).replace('CL-', ''), 10);
+  if (isNaN(clientId)) return res.status(400).json({ error: 'Invalid client ID.' });
+
   db.all(`SELECT * FROM client_logs WHERE client_id = ? ORDER BY id DESC LIMIT 50`, [clientId], (err, rows) => {
     if (err) return res.status(500).json({ error: 'Failed to fetch activity logs.' });
     const formatted = (rows || []).map(r => ({ ...r, details: JSON.parse(r.details || '{}') }));
@@ -516,14 +560,17 @@ wss.on('connection', (ws) => {
       if (action === 'CLOSE_POSITION') {
         const { id, clientId } = data;
         const posIndex = activePositions.findIndex((p) => p.id === id);
+
         if (posIndex !== -1) {
           const closedPos = activePositions[posIndex];
-          db.run(`UPDATE clients SET balance = MAX(0, balance + ?) WHERE id = ?`, [closedPos.pnl, clientId], (err) => {
-            if (!err) broadcastBalanceUpdate(clientId);
+          const rawId = parseInt(String(clientId).replace('CL-', ''), 10);
+
+          db.run(`UPDATE clients SET balance = MAX(0, balance + ?) WHERE id = ?`, [closedPos.pnl, rawId], (err) => {
+            if (!err) broadcastBalanceUpdate(rawId);
           });
           
           activePositions.splice(posIndex, 1);
-          logClientActivity(clientId, 'CLOSE_POSITION', { positionId: id, realizedPnL: closedPos.pnl });
+          logClientActivity(rawId, 'CLOSE_POSITION', { positionId: id, realizedPnL: closedPos.pnl });
         }
       }
     } catch (err) {

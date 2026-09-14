@@ -342,6 +342,7 @@ function TradingViewChart({ tvSymbol, interval }) {
   const holderRef = useRef(null);
   const idRef = useRef(`tv_${Math.random().toString(36).slice(2, 10)}`);
   const [status, setStatus] = useState('loading'); // loading | ready | failed
+
   useEffect(() => {
     let cancelled = false;
     let widget = null;
@@ -349,6 +350,7 @@ function TradingViewChart({ tvSymbol, interval }) {
     const timeout = setTimeout(() => {
       if (!cancelled) setStatus((s) => (s === 'loading' ? 'failed' : s));
     }, 9000);
+
     loadTradingView()
       .then((TV) => {
         if (cancelled || !holderRef.current) return;
@@ -358,6 +360,7 @@ function TradingViewChart({ tvSymbol, interval }) {
         mount.style.height = '100%';
         mount.style.width = '100%';
         holderRef.current.appendChild(mount);
+
         widget = new TV.widget({
           container_id: idRef.current,
           symbol: tvSymbol,
@@ -378,6 +381,7 @@ function TradingViewChart({ tvSymbol, interval }) {
           gridColor: 'rgba(148,163,184,0.08)',
           studies: []
         });
+
         clearTimeout(timeout);
         if (!cancelled) setStatus('ready');
       })
@@ -385,6 +389,7 @@ function TradingViewChart({ tvSymbol, interval }) {
         clearTimeout(timeout);
         if (!cancelled) setStatus('failed');
       });
+
     return () => {
       cancelled = true;
       clearTimeout(timeout);
@@ -394,7 +399,9 @@ function TradingViewChart({ tvSymbol, interval }) {
       if (holderRef.current) holderRef.current.innerHTML = '';
     };
   }, [tvSymbol, interval]);
+
   if (status === 'failed') return <FallbackCandles />;
+
   return (
     <div className="relative h-full w-full rounded-xl overflow-hidden td-inset">
       <div ref={holderRef} className="h-full w-full" />
@@ -412,6 +419,7 @@ function TradingViewChart({ tvSymbol, interval }) {
 function PriceTick({ value, digits, className = '' }) {
   const prev = useRef(value);
   const [dir, setDir] = useState(null);
+
   useEffect(() => {
     if (value > prev.current) setDir('up');
     else if (value < prev.current) setDir('down');
@@ -419,6 +427,7 @@ function PriceTick({ value, digits, className = '' }) {
     const t = setTimeout(() => setDir(null), 700);
     return () => clearTimeout(t);
   }, [value]);
+
   return (
     <span
       className={`td-num inline-block rounded px-1 ${className} ${dir === 'up' ? 'td-flash-up text-emerald-300' : dir === 'down' ? 'td-flash-down text-rose-300' : ''}`}
@@ -431,6 +440,7 @@ function PriceTick({ value, digits, className = '' }) {
 /* ---- Profile field: only renders what actually exists on the account ---- */
 function ProfileField({ icon: Icon, label, value }) {
   const has = value !== undefined && value !== null && String(value).trim() !== '';
+
   return (
     <div className="td-inset rounded-xl p-4">
       <div className="flex items-center gap-2 text-[10px] font-semibold tracking-wide text-slate-500 uppercase mb-2">
@@ -456,7 +466,6 @@ export default function TradingDashboard() {
     idNumber: '',
     documentType: 'Passport'
   });
-
   const [currentUser, setCurrentUser] = useState(null);
 
   // Financial Balances (Persisted & Synced with Account Context)
@@ -481,7 +490,6 @@ export default function TradingDashboard() {
         setCurrentUser(null);
       }
     };
-
     syncUserData();
     const interval = setInterval(syncUserData, 2000);
     return () => clearInterval(interval);
@@ -529,7 +537,7 @@ export default function TradingDashboard() {
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [feedMode, setFeedMode] = useState(PRICE_FEED_URL ? 'live' : 'simulated');
 
-  // Real-time price updates simulation
+  // Real-time price updates simulation + STEP C: STREAM RUNNING PNL & EQUITY
   useEffect(() => {
     const priceInterval = setInterval(() => {
       setLivePrices(prevPrices => {
@@ -540,21 +548,49 @@ export default function TradingDashboard() {
           const newPrice = updated[symbol] + randomDelta;
           updated[symbol] = parseFloat(newPrice.toFixed(baseConfig.digits));
         });
+
+        // STEP C FIX: Recalculate dynamic PnL across active positions on price ticks
+        let totalFloatingPnL = 0;
+        setOpenPositions(prevPositions => {
+          return prevPositions.map(pos => {
+            const currentPrice = updated[pos.symbol] || pos.openPrice;
+            const priceDelta = pos.type === 'BUY'
+              ? currentPrice - pos.openPrice
+              : pos.openPrice - currentPrice;
+
+            const contractMultiplier = MULTI_ASSET_REGISTRY[pos.symbol]?.category === 'Forex' ? 100000 : 100;
+            const computedPnL = parseFloat((priceDelta * pos.volume * contractMultiplier).toFixed(2));
+            totalFloatingPnL += computedPnL;
+
+            return {
+              ...pos,
+              currentPrice,
+              pnl: computedPnL
+            };
+          });
+        });
+
+        // STEP C FIX: Stream live equity updates = Balance + Total Floating PnL
+        setEquityUSD(parseFloat((balanceUSD + totalFloatingPnL).toFixed(2)));
+
         return updated;
       });
     }, 1200);
+
     return () => clearInterval(priceInterval);
-  }, []);
+  }, [balanceUSD]);
 
   // Real quote feed integration
   useEffect(() => {
     if (!PRICE_FEED_URL) return;
     let alive = true;
+
     const pull = async () => {
       try {
         const res = await fetch(PRICE_FEED_URL);
         const quotes = await res.json();
         if (!alive || !quotes || typeof quotes !== 'object') return;
+
         setLivePrices(prev => {
           const next = { ...prev };
           Object.keys(quotes).forEach(sym => {
@@ -564,11 +600,13 @@ export default function TradingDashboard() {
           });
           return next;
         });
+
         if (alive) setFeedMode('live');
       } catch (e) {
         if (alive) setFeedMode('simulated');
       }
     };
+
     pull();
     const id = setInterval(pull, PRICE_FEED_INTERVAL_MS);
     return () => { alive = false; clearInterval(id); };
@@ -578,8 +616,13 @@ export default function TradingDashboard() {
   const activePrice = livePrices[selectedAssetKey] || activeAsset.price;
   const activeCryptoConfig = REGIONAL_CRYPTO_CONFIG[selectedCountry];
 
+  // STEP B FIX: Calculate trade dynamic PnL
   const handleExecuteTrade = (type) => {
     const vol = parseFloat(orderVolume) || 0.1;
+    const contractMultiplier = activeAsset.category === 'Forex' ? 100000 : 100;
+    const priceDelta = type === 'BUY' ? activePrice - activePrice : activePrice - activePrice;
+    const computedPnL = parseFloat((priceDelta * vol * contractMultiplier).toFixed(2));
+
     const newPosition = {
       id: Math.floor(1000 + Math.random() * 9000),
       symbol: selectedAssetKey,
@@ -589,13 +632,27 @@ export default function TradingDashboard() {
       currentPrice: activePrice,
       sl: parseFloat(stopLoss) || 0,
       tp: parseFloat(takeProfit) || 0,
-      pnl: 0.00,
+      pnl: computedPnL,
       time: new Date().toLocaleTimeString()
     };
+
     setOpenPositions([newPosition, ...openPositions]);
   };
 
   const handleClosePosition = (posId) => {
+    const targetPos = openPositions.find(p => p.id === posId);
+    if (targetPos) {
+      const closedPnL = targetPos.pnl || 0;
+      const newBalance = parseFloat((balanceUSD + closedPnL).toFixed(2));
+      setBalanceUSD(newBalance);
+
+      // Sync back to local storage session if user context exists
+      if (currentUser) {
+        const updatedUser = { ...currentUser, balance: newBalance, balanceUSD: newBalance };
+        localStorage.setItem('current_user', JSON.stringify(updatedUser));
+        setCurrentUser(updatedUser);
+      }
+    }
     setOpenPositions(openPositions.filter(p => p.id !== posId));
   };
 
@@ -667,6 +724,7 @@ export default function TradingDashboard() {
   return (
     <div className="td-root min-h-screen bg-[#060A14] text-slate-100 flex flex-col selection:bg-cyan-500 selection:text-black">
       <TerminalStyles />
+
       {/* HEADER / TOP NAVIGATION BAR */}
       <header className="bg-[#050810]/90 border-b border-white/[0.07] px-4 sm:px-6 py-3 flex justify-between items-center sticky top-0 z-40 backdrop-blur-xl">
         <div className="flex items-center gap-5">
@@ -679,6 +737,7 @@ export default function TradingDashboard() {
               <span className="td-num text-[9px] text-cyan-400 tracking-[0.3em] uppercase font-bold">Markets</span>
             </div>
           </div>
+
           <nav className="hidden md:flex items-center gap-1 bg-white/[0.04] p-1.5 rounded-xl border border-white/[0.08] text-xs font-semibold">
             {navItems.map(item => (
               <button
@@ -696,6 +755,7 @@ export default function TradingDashboard() {
             ))}
           </nav>
         </div>
+
         <div className="flex items-center gap-2.5 sm:gap-3">
           <div className="hidden xl:flex items-center gap-2 bg-white/[0.04] px-3.5 py-2 rounded-xl border border-white/[0.08] text-xs td-num">
             <Globe className="w-3.5 h-3.5 text-cyan-400" />
@@ -710,11 +770,13 @@ export default function TradingDashboard() {
               ))}
             </select>
           </div>
+
           <div className="hidden sm:flex items-center gap-2 bg-white/[0.04] border border-white/[0.08] px-3.5 py-2 rounded-xl text-xs td-num">
             <Wallet className="w-4 h-4 text-emerald-400" />
             <span className="text-slate-500">Bal:</span>
             <span className="text-emerald-400 font-extrabold">${balanceUSD.toLocaleString('en-US', { minimumFractionDigits: 2 })}</span>
           </div>
+
           <button
             onClick={() => setIsWithdrawOpen(true)}
             className="px-3.5 sm:px-4 py-2 bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.10] hover:border-cyan-500/40 text-white font-bold text-xs rounded-xl transition flex items-center gap-1.5"
@@ -722,6 +784,7 @@ export default function TradingDashboard() {
             <ArrowUpRight className="w-4 h-4 text-cyan-400" />
             <span className="hidden sm:inline">Withdraw</span>
           </button>
+
           <button
             onClick={() => navigate('/')}
             className="p-2 bg-white/[0.04] hover:bg-rose-500/12 text-slate-400 hover:text-rose-400 border border-white/[0.08] hover:border-rose-500/30 rounded-xl transition"
@@ -729,6 +792,7 @@ export default function TradingDashboard() {
           >
             <LogOut className="w-4 h-4" />
           </button>
+
           <button
             onClick={() => setMobileNavOpen(v => !v)}
             className="md:hidden p-2 bg-white/[0.04] border border-white/[0.08] rounded-xl text-slate-300"
@@ -738,6 +802,7 @@ export default function TradingDashboard() {
           </button>
         </div>
       </header>
+
       {/* MOBILE NAV */}
       {mobileNavOpen && (
         <div className="md:hidden bg-[#050810]/98 border-b border-white/[0.07] backdrop-blur-xl px-4 py-3 flex flex-col gap-1 sticky top-[60px] z-30">
@@ -755,6 +820,7 @@ export default function TradingDashboard() {
           ))}
         </div>
       )}
+
       {/* LIVE TICKER STRIP */}
       <div className="bg-[#040711] border-b border-white/[0.06] py-2 td-fade-x overflow-hidden">
         <div className="td-marquee gap-7 pr-7">
@@ -778,6 +844,7 @@ export default function TradingDashboard() {
           })}
         </div>
       </div>
+
       {/* MAIN CONTAINER */}
       <main className="flex-1 p-4 sm:p-6 max-w-[1700px] w-full mx-auto space-y-6">
         {/* TAB 1: TRADING TERMINAL DESK */}
@@ -794,6 +861,7 @@ export default function TradingDashboard() {
                   {totalAssets} Assets
                 </span>
               </div>
+
               <div className="relative mb-3">
                 <Search className="w-3.5 h-3.5 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
                 <input
@@ -804,6 +872,7 @@ export default function TradingDashboard() {
                   className="w-full td-inset rounded-xl pl-9 pr-3 py-2.5 text-xs text-white placeholder-slate-600 focus:outline-none focus:border-cyan-500/60 transition"
                 />
               </div>
+
               <div className="flex gap-1 mb-3 bg-white/[0.03] p-1 rounded-xl border border-white/[0.07] text-[10px] font-bold overflow-x-auto td-scroll">
                 {ASSET_CATEGORIES.map(cat => (
                   <button
@@ -819,6 +888,7 @@ export default function TradingDashboard() {
                   </button>
                 ))}
               </div>
+
               <div className="space-y-1.5 overflow-y-auto flex-1 min-h-[320px] max-h-[560px] lg:max-h-none pr-1 td-scroll">
                 {visibleAssets.length === 0 && (
                   <div className="text-center py-10 text-xs text-slate-600">No instruments match that search.</div>
@@ -860,6 +930,7 @@ export default function TradingDashboard() {
                   );
                 })}
               </div>
+
               <div className="mt-3 pt-3 border-t border-white/[0.08] flex items-center justify-between text-[10px] td-num text-slate-500">
                 <span className="flex items-center gap-1.5">
                   <span className={`w-1.5 h-1.5 rounded-full ${feedMode === 'live' ? 'bg-emerald-400' : 'bg-amber-400'} td-glow`} />
@@ -868,6 +939,7 @@ export default function TradingDashboard() {
                 <span>{visibleAssets.length} shown</span>
               </div>
             </div>
+
             {/* MIDDLE 6 COLS: LIVE INTERACTIVE CHART & POSITIONS */}
             <div className="lg:col-span-6 space-y-5">
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
@@ -886,6 +958,7 @@ export default function TradingDashboard() {
                   </div>
                 ))}
               </div>
+
               <div className="td-panel rounded-2xl p-4 sm:p-5 h-[560px] flex flex-col shadow-2xl relative overflow-hidden">
                 <div className="flex flex-wrap justify-between items-center gap-3 border-b border-white/[0.08] pb-3">
                   <div className="flex items-center gap-3 min-w-0">
@@ -916,9 +989,11 @@ export default function TradingDashboard() {
                     </div>
                   </div>
                 </div>
+
                 <div className="flex-1 my-4 min-h-0">
                   <TradingViewChart tvSymbol={activeAsset.tv} interval={chartInterval} />
                 </div>
+
                 <div className="flex flex-wrap gap-y-2 justify-between items-center text-[10.5px] text-slate-500 td-num pt-2 border-t border-white/[0.08]">
                   <div className="flex items-center gap-2">
                     <span className="relative flex h-2 w-2">
@@ -934,6 +1009,7 @@ export default function TradingDashboard() {
                   <div>Leverage Mode: 1:500 ECN Direct</div>
                 </div>
               </div>
+
               <div className="td-panel rounded-2xl p-5 shadow-2xl">
                 <div className="flex justify-between items-center mb-4 pb-2.5 border-b border-white/[0.08]">
                   <h3 className="text-xs font-bold uppercase tracking-wide text-slate-300 flex items-center gap-2">
@@ -944,6 +1020,7 @@ export default function TradingDashboard() {
                     <span className="td-num text-[10px] text-slate-500">Updated {new Date().toLocaleTimeString()}</span>
                   )}
                 </div>
+
                 {openPositions.length === 0 ? (
                   <div className="text-center py-10 flex flex-col items-center gap-2.5">
                     <div className="p-3 rounded-2xl bg-white/[0.03] border border-white/[0.07]">
@@ -980,7 +1057,9 @@ export default function TradingDashboard() {
                             <td className="py-3 text-slate-300">{pos.volume} Lots</td>
                             <td className="py-3 text-slate-300">{pos.openPrice}</td>
                             <td className="py-3 text-slate-300">{pos.currentPrice}</td>
-                            <td className="py-3 font-bold text-emerald-400">+$0.00</td>
+                            <td className={`py-3 font-bold ${pos.pnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                              {pos.pnl >= 0 ? `+$${pos.pnl.toFixed(2)}` : `-$${Math.abs(pos.pnl).toFixed(2)}`}
+                            </td>
                             <td className="py-3 text-right">
                               <button
                                 onClick={() => handleClosePosition(pos.id)}
@@ -997,6 +1076,7 @@ export default function TradingDashboard() {
                 )}
               </div>
             </div>
+
             {/* RIGHT 3 COLS: ORDER EXECUTION TICKET */}
             <div className="lg:col-span-3 td-panel rounded-2xl p-5 flex flex-col justify-between lg:h-[820px] shadow-2xl">
               <div>
@@ -1007,6 +1087,7 @@ export default function TradingDashboard() {
                   </h3>
                   <span className="td-num text-[10px] bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 px-2 py-0.5 rounded">Market Instant</span>
                 </div>
+
                 <div className="mb-5 grid grid-cols-2 gap-2.5">
                   <div className="td-inset rounded-xl p-3">
                     <div className="text-[9.5px] font-semibold uppercase tracking-wide text-rose-400 mb-1">Sell / Bid</div>
@@ -1021,6 +1102,7 @@ export default function TradingDashboard() {
                     <span className="text-amber-300 font-bold">{activeAsset.spread}</span>
                   </div>
                 </div>
+
                 <div className="space-y-4">
                   <div>
                     <label className="block text-[10px] font-semibold text-slate-400 uppercase tracking-wide mb-1.5">Trade Volume (Lots)</label>
@@ -1044,6 +1126,7 @@ export default function TradingDashboard() {
                       ))}
                     </div>
                   </div>
+
                   <div className="grid grid-cols-2 gap-3">
                     <div>
                       <label className="block text-[10px] font-semibold text-slate-400 uppercase tracking-wide mb-1.5">Stop Loss (SL)</label>
@@ -1066,6 +1149,7 @@ export default function TradingDashboard() {
                       />
                     </div>
                   </div>
+
                   <div className="td-inset rounded-xl p-3.5 space-y-2.5 text-[11px] td-num text-slate-400">
                     <div className="flex justify-between">
                       <span>Margin Required:</span>
@@ -1082,6 +1166,7 @@ export default function TradingDashboard() {
                   </div>
                 </div>
               </div>
+
               <div className="space-y-3 pt-5 border-t border-white/[0.08]">
                 <div className="grid grid-cols-2 gap-3">
                   <button
@@ -1106,6 +1191,7 @@ export default function TradingDashboard() {
             </div>
           </div>
         )}
+
         {/* TAB 2: DEPOSIT PAGE */}
         {activeTab === 'deposit' && (
           <div className="max-w-4xl mx-auto space-y-8 py-4 td-enter">
@@ -1119,6 +1205,7 @@ export default function TradingDashboard() {
                 Choose your preferred payment method and specify your transfer amount. All transactions are securely processed and credited to your trading account.
               </p>
             </div>
+
             <div className="td-panel rounded-3xl p-6 sm:p-8 shadow-2xl max-w-2xl mx-auto space-y-6">
               <div className="flex justify-between items-center pb-4 border-b border-white/[0.08]">
                 <h3 className="text-lg font-bold text-white flex items-center gap-2">
@@ -1129,6 +1216,7 @@ export default function TradingDashboard() {
                   Zero Processing Fees
                 </span>
               </div>
+
               {/* REGIONAL GATEWAY SELECTOR */}
               <div className="td-inset p-4 rounded-2xl space-y-2">
                 <div className="text-[10px] text-slate-500 td-num uppercase tracking-wide font-semibold">Selected Regional Gateway</div>
@@ -1137,6 +1225,7 @@ export default function TradingDashboard() {
                   <span className="text-emerald-400 td-num">{activeCryptoConfig.currency}</span>
                 </div>
               </div>
+
               {/* PAYMENT METHOD SELECTOR */}
               <div className="space-y-2">
                 <label className="block text-[10px] font-semibold text-slate-400 uppercase tracking-wide">Select Payment Method</label>
@@ -1157,6 +1246,7 @@ export default function TradingDashboard() {
                   ))}
                 </div>
               </div>
+
               {/* WALLET ADDRESS DISPLAY */}
               <div className="space-y-1.5">
                 <label className="block text-[10px] font-semibold text-slate-400 uppercase tracking-wide">
@@ -1182,6 +1272,7 @@ export default function TradingDashboard() {
                   </button>
                 </div>
               </div>
+
               {/* DEPOSIT FORM */}
               <form onSubmit={handleDepositSubmit} className="space-y-4 pt-2">
                 <div>
@@ -1215,6 +1306,7 @@ export default function TradingDashboard() {
                 </button>
               </form>
             </div>
+
             {/* EXPANDED CRYPTO WALLETS LIST FOR QUICK SELECTION */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 max-w-2xl mx-auto">
               {CRYPTO_WALLETS.map((wallet) => (
@@ -1249,6 +1341,7 @@ export default function TradingDashboard() {
             </div>
           </div>
         )}
+
         {/* TAB 3: KYC COMPLIANCE */}
         {activeTab === 'kyc' && (
           <div className="max-w-2xl mx-auto py-6 td-enter">
@@ -1269,6 +1362,7 @@ export default function TradingDashboard() {
                   {kycState.status === 'pending' ? 'Under review' : 'Unverified'}
                 </span>
               </div>
+
               <form onSubmit={handleKycSubmit} className="space-y-4">
                 <div>
                   <label className="block text-[10px] font-semibold text-slate-400 uppercase tracking-wide mb-1.5">Full Legal Name</label>
@@ -1319,6 +1413,7 @@ export default function TradingDashboard() {
             </div>
           </div>
         )}
+
         {/* TAB 4: PROFILE */}
         {activeTab === 'profile' && (
           <div className="max-w-5xl mx-auto py-4 space-y-5 td-enter">
@@ -1352,6 +1447,7 @@ export default function TradingDashboard() {
                 </div>
               </div>
             </div>
+
             {!currentUser && (
               <div className="td-panel rounded-2xl p-4 flex items-start gap-3 border-amber-500/25">
                 <AlertCircle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
@@ -1361,6 +1457,7 @@ export default function TradingDashboard() {
                 </p>
               </div>
             )}
+
             <div className="td-panel rounded-2xl p-6 shadow-2xl">
               <h3 className="text-xs font-bold uppercase tracking-wide text-cyan-400 flex items-center gap-2 mb-5 pb-3 border-b border-white/[0.08]">
                 <User className="w-4 h-4" />
@@ -1383,6 +1480,7 @@ export default function TradingDashboard() {
                 />
               </div>
             </div>
+
             <div className="td-panel rounded-2xl p-6 shadow-2xl">
               <h3 className="text-xs font-bold uppercase tracking-wide text-cyan-400 flex items-center gap-2 mb-5 pb-3 border-b border-white/[0.08]">
                 <BarChart2 className="w-4 h-4" />
@@ -1414,6 +1512,7 @@ export default function TradingDashboard() {
           </div>
         )}
       </main>
+
       {/* DEPOSIT MODAL POPUP */}
       {isDepositOpen && (
         <div className="fixed inset-0 bg-slate-950/85 backdrop-blur-md flex items-center justify-center p-4 z-50">
@@ -1470,6 +1569,7 @@ export default function TradingDashboard() {
           </div>
         </div>
       )}
+
       {/* WITHDRAWAL MODAL POPUP */}
       {isWithdrawOpen && (
         <div className="fixed inset-0 bg-slate-950/85 backdrop-blur-md flex items-center justify-center p-4 z-50 overflow-y-auto">
@@ -1519,11 +1619,11 @@ export default function TradingDashboard() {
                 </select>
               </div>
               <div>
-                <label className="block text-[10px] font-semibold text-slate-400 uppercase tracking-wide mb-1.5">Payment / Account Details</label>
-                <input
-                  type="text"
+                <label className="block text-[10px] font-semibold text-slate-400 uppercase tracking-wide mb-1.5">Payment Destination Details</label>
+                <textarea
                   required
-                  placeholder="Account Number or Wallet Address"
+                  rows={3}
+                  placeholder="Bank IBAN / Account Number or Wallet Address"
                   value={withdrawForm.paymentDetails}
                   onChange={(e) => setWithdrawForm({...withdrawForm, paymentDetails: e.target.value})}
                   className="w-full td-inset rounded-xl px-4 py-3 text-xs text-white focus:outline-none focus:border-cyan-500/60"
@@ -1531,9 +1631,9 @@ export default function TradingDashboard() {
               </div>
               <button
                 type="submit"
-                className="w-full py-3.5 bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-slate-950 font-extrabold text-xs rounded-xl shadow-lg shadow-cyan-500/25 transition mt-2"
+                className="w-full py-3.5 bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-slate-950 font-extrabold text-xs rounded-xl shadow-lg shadow-cyan-500/25 transition"
               >
-                Request Withdrawal
+                Submit Withdrawal Request
               </button>
             </form>
           </div>
