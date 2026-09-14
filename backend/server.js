@@ -232,7 +232,6 @@ app.get('/api/admin/clients-detailed', (req, res) => {
 app.post('/api/admin/assign-agent', (req, res) => {
   const { clientId, assignedAgent, agentId } = req.body;
   const rawId = parseInt(String(clientId).replace('CL-', ''), 10);
-
   if (isNaN(rawId)) {
     return res.status(400).json({ error: 'Invalid Client ID provided.' });
   }
@@ -272,7 +271,6 @@ app.post('/api/admin/create-agent', (req, res) => {
   if (!name || !email || !password) {
     return res.status(400).json({ error: 'Agent name, email, and password are required.' });
   }
-
   const cleanEmail = email.toLowerCase().trim();
   db.run(
     `INSERT INTO crm_agents (name, email, password, role) VALUES (?, ?, ?, ?)`,
@@ -339,8 +337,10 @@ app.post('/api/admin/approve-transaction', (req, res) => {
   db.get(`SELECT * FROM transactions WHERE id = ?`, [transactionId], (err, tx) => {
     if (err || !tx) return res.status(404).json({ error: 'Transaction not found.' });
     if (tx.status !== 'PENDING') return res.status(400).json({ error: 'Transaction already processed.' });
+
     db.run(`UPDATE transactions SET status = ? WHERE id = ?`, [status, transactionId], function (updateErr) {
       if (updateErr) return res.status(500).json({ error: 'Failed to update transaction status.' });
+
       if (status === 'APPROVED') {
         const delta = tx.type === 'WITHDRAWAL' ? -Math.abs(tx.amount) : Math.abs(tx.amount);
         db.run(`UPDATE clients SET balance = MAX(0, balance + ?) WHERE id = ?`, [delta, tx.client_id], (balErr) => {
@@ -378,7 +378,6 @@ const handleBalanceAdjustment = (req, res) => {
   } else {
     const isDeduction = rawType === 'DEDUCT' || rawType === 'MINUS';
     const adjustment = isDeduction ? -Math.abs(amount) : Math.abs(amount);
-
     db.run(`UPDATE clients SET balance = MAX(0, balance + ?) WHERE id = ?`, [adjustment, clientId], function (err) {
       if (err) return res.status(500).json({ error: 'Failed to update balance.' });
       db.run(
@@ -399,9 +398,11 @@ app.post('/api/admin/adjust-balance', handleBalanceAdjustment);
 app.post('/api/cashier/deposit', (req, res) => {
   const { amount, method, txHash, clientId, type } = req.body;
   const transactionType = (type || 'DEPOSIT').toUpperCase();
+
   if (!clientId || !amount || isNaN(amount) || amount <= 0) {
     return res.status(400).json({ error: 'Invalid transaction parameters.' });
   }
+
   db.run(
     `INSERT INTO transactions (client_id, type, amount, status, method, tx_hash) VALUES (?, ?, ?, 'PENDING', ?, ?)`,
     [clientId, transactionType, parseFloat(amount), method || 'Crypto', txHash || 'N/A'],
@@ -443,6 +444,7 @@ let marketPrices = {
   EURUSD: { bid: 1.0850, ask: 1.0852, category: 'MAJOR_FOREX' },
   BTCUSD: { bid: 65000.00, ask: 65010.00, category: 'CRYPTO' }
 };
+
 let activePositions = [];
 let nextPositionId = 1;
 
@@ -514,7 +516,6 @@ wss.on('connection', (ws) => {
       if (action === 'CLOSE_POSITION') {
         const { id, clientId } = data;
         const posIndex = activePositions.findIndex((p) => p.id === id);
-
         if (posIndex !== -1) {
           const closedPos = activePositions[posIndex];
           db.run(`UPDATE clients SET balance = MAX(0, balance + ?) WHERE id = ?`, [closedPos.pnl, clientId], (err) => {

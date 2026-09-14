@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { 
   Shield, 
   Users, 
@@ -8,11 +8,11 @@ import {
   Phone,
   LayoutDashboard,
   UserPlus,
-  Calendar,
   Lock,
   UserCheck,
   Plus,
-  Globe
+  Globe,
+  Mail
 } from 'lucide-react';
 
 export default function AdminPortal() {
@@ -20,17 +20,26 @@ export default function AdminPortal() {
   // 1. AUTH & ROLE MANAGEMENT
   // -------------------------------------------------------------
   const [currentUser, setCurrentUser] = useState(() => {
-    const saved = localStorage.getItem('meridian_crm_auth');
-    return saved ? JSON.parse(saved) : null;
+    try {
+      const saved = localStorage.getItem('meridian_crm_auth');
+      return saved ? JSON.parse(saved) : null;
+    } catch {
+      return null;
+    }
   });
+
   const [loginEmail, setLoginEmail] = useState('');
   const [loginPassword, setLoginPassword] = useState('');
   const [loginError, setLoginError] = useState('');
 
   // Agents state with local storage persistence
   const [agents, setAgents] = useState(() => {
-    const saved = localStorage.getItem('meridian_crm_agents');
-    return saved ? JSON.parse(saved) : [];
+    try {
+      const saved = localStorage.getItem('meridian_crm_agents');
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
   });
 
   useEffect(() => {
@@ -52,7 +61,9 @@ export default function AdminPortal() {
     }
     
     // Check local agents (Fallback)
-    const matchedAgent = agents.find(ag => ag.email.trim().toLowerCase() === cleanedEmail && ag.password === loginPassword);
+    const matchedAgent = agents.find(
+      ag => ag.email.trim().toLowerCase() === cleanedEmail && ag.password === loginPassword
+    );
     if (matchedAgent) {
       const user = { name: matchedAgent.name, email: matchedAgent.email, role: 'AGENT', agentId: matchedAgent.name };
       setCurrentUser(user);
@@ -95,35 +106,34 @@ export default function AdminPortal() {
   const [kycFilter, setKycFilter] = useState('ALL');
   
   const [clients, setClients] = useState(() => {
-    const saved = localStorage.getItem('meridian_crm_clients');
-    return saved ? JSON.parse(saved) : [];
+    try {
+      const saved = localStorage.getItem('meridian_crm_clients');
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
   });
 
   useEffect(() => {
     localStorage.setItem('meridian_crm_clients', JSON.stringify(clients));
   }, [clients]);
 
-  const [appointments, setAppointments] = useState(() => {
-    const saved = localStorage.getItem('meridian_crm_appointments');
-    return saved ? JSON.parse(saved) : [];
-  });
-
-  useEffect(() => {
-    localStorage.setItem('meridian_crm_appointments', JSON.stringify(appointments));
-  }, [appointments]);
-
   const [auditLogs, setAuditLogs] = useState(() => {
-    const saved = localStorage.getItem('meridian_crm_audit');
-    return saved ? JSON.parse(saved) : [
-      { id: 'LOG-101', user: 'System', action: 'SYSTEM_BOOT', details: 'CRM Subsystem Initialized', timestamp: new Date().toLocaleString() }
-    ];
+    try {
+      const saved = localStorage.getItem('meridian_crm_audit');
+      return saved ? JSON.parse(saved) : [
+        { id: 'LOG-101', user: 'System', action: 'SYSTEM_BOOT', details: 'CRM Subsystem Initialized', timestamp: new Date().toLocaleString() }
+      ];
+    } catch {
+      return [];
+    }
   });
 
   useEffect(() => {
     localStorage.setItem('meridian_crm_audit', JSON.stringify(auditLogs));
   }, [auditLogs]);
 
-  const addAuditLog = (action, details) => {
+  const addAuditLog = useCallback((action, details) => {
     const newEntry = {
       id: `LOG-${Date.now()}`,
       user: currentUser?.name || 'SYSTEM',
@@ -132,42 +142,59 @@ export default function AdminPortal() {
       timestamp: new Date().toLocaleString()
     };
     setAuditLogs(prev => [newEntry, ...prev]);
-  };
+  }, [currentUser]);
+
+  // Form states
+  const [selectedClientId, setSelectedClientId] = useState('');
+  const [adjustmentType, setAdjustmentType] = useState('ADD');
+  const [adjustmentAmount, setAdjustmentAmount] = useState('');
+
+  const [newAgentName, setNewAgentName] = useState('');
+  const [newAgentEmail, setNewAgentEmail] = useState('');
+  const [newAgentPassword, setNewAgentPassword] = useState('');
 
   // -------------------------------------------------------------
-  // 3. LIVE BACKEND FETCHING
+  // 3. LIVE BACKEND FETCHING (MERGED TO PREVENT OVERWRITE)
   // -------------------------------------------------------------
-  const fetchClients = async () => {
+  const fetchClients = useCallback(async () => {
     try {
       const response = await fetch('/api/admin/clients-detailed');
       if (response.ok) {
         const data = await response.json();
         const rawClients = data.clients || data;
         if (Array.isArray(rawClients)) {
-          const formattedClients = rawClients.map((c) => ({
-            id: `CL-${c.id}`,
-            dbId: c.id,
-            name: c.full_name || c.name || 'Unknown',
-            email: c.email || 'N/A',
-            phone: c.phone || c.phone_number || 'N/A',
-            ip: c.ip_address || c.ip || '127.0.0.1',
-            assignedAgent: c.assigned_agent || c.agent_name || c.assignedAgent || 'Unassigned',
-            kycStatus: c.kycStatus || c.kyc_status || 'PENDING',
-            stage: c.stage || 'NEW_LEAD',
-            balanceUSD: typeof c.balanceUSD === 'number' ? c.balanceUSD : parseFloat(c.balanceUSD || c.balance || 0),
-            bonusUSD: typeof c.bonusUSD === 'number' ? c.bonusUSD : parseFloat(c.bonusUSD || c.bonus || 0),
-            isOnline: c.isOnline !== undefined ? c.isOnline : true,
-            callNotes: c.callNotes || [],
-            createdAt: c.createdAt || new Date().toISOString().split('T')[0],
-            lastContact: c.lastContact || new Date().toISOString().split('T')[0]
-          }));
-          setClients(formattedClients);
+          setClients(prevClients => {
+            const prevClientMap = new Map(prevClients.map(c => [c.id, c]));
+            
+            return rawClients.map((c) => {
+              const formattedId = `CL-${c.id}`;
+              const existing = prevClientMap.get(formattedId);
+
+              return {
+                id: formattedId,
+                dbId: c.id,
+                name: c.full_name || c.name || 'Unknown',
+                email: c.email || 'N/A',
+                phone: c.phone || c.phone_number || 'N/A',
+                ip: c.ip_address || c.ip || '127.0.0.1',
+                assignedAgent: existing?.assignedAgent || c.assigned_agent || c.agent_name || c.assignedAgent || 'Unassigned',
+                kycStatus: c.kycStatus || c.kyc_status || 'PENDING',
+                stage: c.stage || 'NEW_LEAD',
+                balanceUSD: existing?.balanceUSD ?? (typeof c.balanceUSD === 'number' ? c.balanceUSD : parseFloat(c.balanceUSD || c.balance || 0)),
+                bonusUSD: existing?.bonusUSD ?? (typeof c.bonusUSD === 'number' ? c.bonusUSD : parseFloat(c.bonusUSD || c.bonus || 0)),
+                isOnline: c.isOnline !== undefined ? c.isOnline : true,
+                callNotes: c.callNotes || [],
+                createdAt: c.createdAt || new Date().toISOString().split('T')[0],
+                lastContact: c.lastContact || new Date().toISOString().split('T')[0]
+              };
+            });
+          });
         }
       }
     } catch (err) {
       console.warn('Backend unavailable, using persistent client state.', err);
     }
-  };
+  }, []);
 
   useEffect(() => {
     if (currentUser) {
@@ -177,8 +204,9 @@ export default function AdminPortal() {
       }, 10000);
       return () => clearInterval(interval);
     }
-  }, [currentUser]);
+  }, [currentUser, fetchClients]);
 
+  // Derived filtered client list
   const visibleClients = useMemo(() => {
     return clients.filter(c => {
       const q = searchQuery.toLowerCase();
@@ -192,16 +220,13 @@ export default function AdminPortal() {
         ));
       const matchesStatus = statusFilter === 'ALL' || c.stage === statusFilter;
       const matchesKyc = kycFilter === 'ALL' || c.kycStatus === kycFilter;
+
       if (!currentUser) return false;
       if (currentUser.role === 'ADMIN') return matchesSearch && matchesStatus && matchesKyc;
       
       return matchesSearch && matchesStatus && matchesKyc && c.assignedAgent === currentUser.agentId;
     });
   }, [clients, searchQuery, statusFilter, kycFilter, currentUser]);
-
-  const [selectedClientId, setSelectedClientId] = useState('');
-  const [adjustmentType, setAdjustmentType] = useState('ADD');
-  const [adjustmentAmount, setAdjustmentAmount] = useState('');
 
   useEffect(() => {
     if (visibleClients.length > 0 && !visibleClients.some(c => c.id === selectedClientId)) {
@@ -217,11 +242,10 @@ export default function AdminPortal() {
       alert('Security Exception: Agents are unauthorized to assign accounts.');
       return;
     }
-
     const targetClient = clients.find(c => c.id === clientId);
 
     // Optimistic UI update
-    setClients(clients.map(c => c.id === clientId ? { ...c, assignedAgent: newAgent } : c));
+    setClients(prev => prev.map(c => c.id === clientId ? { ...c, assignedAgent: newAgent } : c));
 
     try {
       await fetch('/api/admin/assign-agent', {
@@ -235,14 +259,8 @@ export default function AdminPortal() {
     } catch (err) {
       console.warn('Backend sync failed for agent assignment.', err);
     }
-
     addAuditLog('AGENT_REASSIGN', `Assigned client ${clientId} to ${newAgent}`);
   };
-
-  // AGENT CREATION BY ADMIN
-  const [newAgentName, setNewAgentName] = useState('');
-  const [newAgentEmail, setNewAgentEmail] = useState('');
-  const [newAgentPassword, setNewAgentPassword] = useState('');
 
   const handleCreateAgent = async (e) => {
     e.preventDefault();
@@ -258,7 +276,6 @@ export default function AdminPortal() {
       password: newAgentPassword,
       createdAt: new Date().toLocaleDateString()
     };
-
     setAgents(prev => [...prev, agentObj]);
 
     try {
@@ -278,7 +295,6 @@ export default function AdminPortal() {
     alert(`Agent ${newAgentName} successfully created.`);
   };
 
-  // AUDITED BALANCE ADJUSTER
   const handleManualBalanceAdjustment = async (e) => {
     e.preventDefault();
     if (currentUser.role !== 'ADMIN') {
@@ -287,10 +303,11 @@ export default function AdminPortal() {
     }
     const amt = parseFloat(adjustmentAmount);
     if (isNaN(amt) || amt <= 0) return alert('Please enter a valid dollar amount.');
+    
     const targetClient = clients.find(c => c.id === selectedClientId);
     if (!targetClient) return alert('Target client not found.');
 
-    // Update UI Optimistically
+    // Optimistic update
     setClients(prevClients => prevClients.map(client => {
       if (client.id === selectedClientId) {
         const currentBal = parseFloat(client.balanceUSD || 0);
@@ -339,6 +356,9 @@ export default function AdminPortal() {
     };
   }, [clients]);
 
+  // -------------------------------------------------------------
+  // AUTH LOGIN SCREEN
+  // -------------------------------------------------------------
   if (!currentUser) {
     return (
       <div className="min-h-screen bg-[#06080d] text-slate-100 flex items-center justify-center p-4 font-sans">
@@ -390,6 +410,9 @@ export default function AdminPortal() {
     );
   }
 
+  // -------------------------------------------------------------
+  // MAIN DASHBOARD LAYOUT
+  // -------------------------------------------------------------
   return (
     <div className="min-h-screen bg-[#06080d] text-slate-100 font-sans flex flex-col">
       <header className="bg-slate-950 border-b border-slate-800 px-8 py-5 flex justify-between items-center sticky top-0 z-40">
@@ -418,7 +441,7 @@ export default function AdminPortal() {
         </button>
       </header>
 
-      {/* MAIN NAVIGATION */}
+      {/* NAVIGATION TABS */}
       <div className="bg-slate-950/60 border-b border-slate-800/80 px-8 py-3">
         <div className="max-w-7xl mx-auto flex flex-wrap gap-2 font-mono text-xs">
           <button
@@ -465,6 +488,7 @@ export default function AdminPortal() {
       </div>
 
       <main className="flex-1 max-w-7xl w-full mx-auto p-8 space-y-6">
+        {/* DASHBOARD TAB */}
         {activeCrmTab === 'dashboard' && (
           <div className="space-y-6 font-mono">
             <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
@@ -528,7 +552,6 @@ export default function AdminPortal() {
                           <div className="font-bold text-white">{client.name}</div>
                           <div className="text-[10px] text-slate-500">{client.email}</div>
                         </td>
-                        {/* ADDED PHONE NUMBER & IP ADDRESS DISPLAY */}
                         <td className="py-4 px-6">
                           <div className="text-white flex items-center gap-1">
                             <Phone className="w-3 h-3 text-cyan-400 inline" />
@@ -576,6 +599,82 @@ export default function AdminPortal() {
           </div>
         )}
 
+        {/* AGENTS MANAGEMENT TAB */}
+        {activeCrmTab === 'agents' && currentUser.role === 'ADMIN' && (
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 font-mono text-xs">
+            {/* Create Agent Form */}
+            <div className="bg-slate-900/40 border border-slate-800 rounded-2xl p-6 space-y-4">
+              <h2 className="text-sm font-bold text-white uppercase border-b border-slate-800 pb-2 flex items-center gap-2">
+                <UserPlus className="w-4 h-4 text-cyan-400" />
+                Create New Agent
+              </h2>
+              <form onSubmit={handleCreateAgent} className="space-y-4">
+                <div>
+                  <label className="block text-slate-400 mb-1">Agent Name</label>
+                  <input 
+                    type="text" 
+                    required 
+                    value={newAgentName}
+                    onChange={(e) => setNewAgentName(e.target.value)}
+                    placeholder="John Doe"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white focus:outline-none focus:border-cyan-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-slate-400 mb-1">Agent Email</label>
+                  <input 
+                    type="email" 
+                    required 
+                    value={newAgentEmail}
+                    onChange={(e) => setNewAgentEmail(e.target.value)}
+                    placeholder="agent@meridianmarket.net"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white focus:outline-none focus:border-cyan-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-slate-400 mb-1">Password</label>
+                  <input 
+                    type="password" 
+                    required 
+                    value={newAgentPassword}
+                    onChange={(e) => setNewAgentPassword(e.target.value)}
+                    placeholder="••••••••"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white focus:outline-none focus:border-cyan-500"
+                  />
+                </div>
+                <button type="submit" className="w-full py-3 bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold rounded-xl uppercase transition cursor-pointer">
+                  Create Agent
+                </button>
+              </form>
+            </div>
+
+            {/* Existing Agents List */}
+            <div className="lg:col-span-2 bg-slate-900/40 border border-slate-800 rounded-2xl p-6 space-y-4">
+              <h2 className="text-sm font-bold text-white uppercase border-b border-slate-800 pb-2">
+                Registered Agents ({agents.length})
+              </h2>
+              {agents.length === 0 ? (
+                <p className="text-slate-500 py-4">No custom agents created yet.</p>
+              ) : (
+                <div className="space-y-3">
+                  {agents.map(ag => (
+                    <div key={ag.id} className="flex items-center justify-between p-3 bg-slate-950 border border-slate-800 rounded-xl">
+                      <div>
+                        <div className="font-bold text-white">{ag.name}</div>
+                        <div className="text-[10px] text-slate-400 flex items-center gap-1 mt-0.5">
+                          <Mail className="w-3 h-3 text-cyan-400" />
+                          {ag.email}
+                        </div>
+                      </div>
+                      <span className="text-[10px] text-slate-500">Created: {ag.createdAt}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
         {/* FINANCIAL OPS TAB */}
         {activeCrmTab === 'financial_ops' && currentUser.role === 'ADMIN' && (
           <div className="max-w-md mx-auto bg-slate-900/40 border border-slate-800 rounded-2xl p-6 space-y-4 font-mono text-xs">
@@ -598,21 +697,21 @@ export default function AdminPortal() {
                 <button 
                   type="button" 
                   onClick={() => setAdjustmentType('ADD')}
-                  className={`py-2 rounded-xl font-bold border ${adjustmentType === 'ADD' ? 'bg-emerald-600 text-white' : 'bg-slate-950 text-slate-400'}`}
+                  className={`py-2 rounded-xl font-bold border transition ${adjustmentType === 'ADD' ? 'bg-emerald-600 border-emerald-500 text-white' : 'bg-slate-950 border-slate-800 text-slate-400'}`}
                 >
                   + Add
                 </button>
                 <button 
                   type="button" 
                   onClick={() => setAdjustmentType('MINUS')}
-                  className={`py-2 rounded-xl font-bold border ${adjustmentType === 'MINUS' ? 'bg-rose-600 text-white' : 'bg-slate-950 text-slate-400'}`}
+                  className={`py-2 rounded-xl font-bold border transition ${adjustmentType === 'MINUS' ? 'bg-rose-600 border-rose-500 text-white' : 'bg-slate-950 border-slate-800 text-slate-400'}`}
                 >
                   - Deduct
                 </button>
                 <button 
                   type="button" 
                   onClick={() => setAdjustmentType('BONUS')}
-                  className={`py-2 rounded-xl font-bold border ${adjustmentType === 'BONUS' ? 'bg-amber-600 text-white' : 'bg-slate-950 text-slate-400'}`}
+                  className={`py-2 rounded-xl font-bold border transition ${adjustmentType === 'BONUS' ? 'bg-amber-600 border-amber-500 text-white' : 'bg-slate-950 border-slate-800 text-slate-400'}`}
                 >
                   + Bonus
                 </button>
@@ -625,10 +724,11 @@ export default function AdminPortal() {
                   required 
                   value={adjustmentAmount}
                   onChange={(e) => setAdjustmentAmount(e.target.value)}
+                  placeholder="0.00"
                   className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white"
                 />
               </div>
-              <button type="submit" className="w-full py-3 bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold rounded-xl uppercase">
+              <button type="submit" className="w-full py-3 bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold rounded-xl uppercase transition cursor-pointer">
                 Execute Adjustment
               </button>
             </form>
