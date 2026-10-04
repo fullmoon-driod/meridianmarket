@@ -79,7 +79,9 @@ function MeridianStyles() {
   return (
     <style>{`
 @import url('https://fonts.googleapis.com/css2?family=Sora:wght@500;600;700;800&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap');
-.mm-root{font-family:'Inter',ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;-webkit-font-smoothing:antialiased; background-color: #ffffff; color: #0b1224; width: 100vw; overflow-x: hidden;}
+html, body { margin: 0; padding: 0; width: 100vw; overflow-x: hidden; background-color: #ffffff; }
+.mm-root{font-family:'Inter',ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;-webkit-font-smoothing:antialiased; background-color: #ffffff; color: #0b1224; width: 100vw; min-width: 100vw; max-width: 100vw; overflow-x: hidden; margin: 0; padding: 0; box-sizing: border-box;}
+.mm-root *, .mm-root *::before, .mm-root *::after { box-sizing: border-box; }
 .mm-display{font-family:'Sora','Inter',ui-sans-serif,system-ui,sans-serif;letter-spacing:-.025em;}
 .mm-num{font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,Menlo,monospace;font-variant-numeric:tabular-nums;}
 
@@ -113,17 +115,16 @@ function MeridianStyles() {
 .mm-marquee:hover{animation-play-state:paused}
 .mm-fade-x{-webkit-mask-image:linear-gradient(90deg,transparent,#000 6%,#000 94%,transparent);mask-image:linear-gradient(90deg,transparent,#000 6%,#000 94%,transparent)}
 
-/* ---- surfaces (Dark layout theme on white background) ---- */
-.mm-grid{background-image:linear-gradient(rgba(11,18,36,.06) 1px,transparent 1px),linear-gradient(90deg,rgba(11,18,36,.06) 1px,transparent 1px);background-size:56px 56px;-webkit-mask-image:radial-gradient(ellipse 80% 60% at 50% 0%,#000 30%,transparent 78%);mask-image:radial-gradient(ellipse 80% 60% at 50% 0%,#000 30%,transparent 78%)}
+/* ---- surfaces (Clean white background, dark blue accents replacing orange) ---- */
 .mm-card{background:linear-gradient(158deg,#0A1024,#060B18);border:1px solid rgba(11,18,36,.15);color:#ffffff;box-shadow:0 10px 30px -10px rgba(11,18,36,0.12)}
 .mm-card-hover{transition:transform .45s cubic-bezier(.16,1,.3,1),border-color .35s,box-shadow .45s}
-.mm-card-hover:hover{transform:translateY(-8px);border-color:rgba(251,191,36,.55);box-shadow:0 26px 70px -28px rgba(11,18,36,.3)}
-.mm-ring{box-shadow:0 0 0 1px rgba(251,191,36,.28),0 30px 90px -32px rgba(11,18,36,.2)}
+.mm-card-hover:hover{transform:translateY(-8px);border-color:rgba(11,37,69,.55);box-shadow:0 26px 70px -28px rgba(11,18,36,.3)}
+.mm-ring{box-shadow:0 0 0 1px rgba(11,37,69,.28),0 30px 90px -32px rgba(11,18,36,.2)}
 .mm-sheen{background-image:linear-gradient(100deg,transparent 38%,rgba(255,255,255,.5) 50%,transparent 62%);background-size:220% 100%;animation:mmSheen 3.4s linear infinite}
-.mm-gold-text{background:linear-gradient(96deg,#FDE68A 0%,#FBBF24 32%,#FCD34D 58%,#F59E0B 100%);-webkit-background-clip:text;background-clip:text;color:transparent}
+.mm-gold-text{background:linear-gradient(96deg,#93C5FD 0%,#1E3A8A 32%,#3B82F6 58%,#0B2545 100%);-webkit-background-clip:text;background-clip:text;color:transparent}
 .mm-cyan-text{background:linear-gradient(96deg,#67E8F9 0%,#22D3EE 50%,#38BDF8 100%);-webkit-background-clip:text;background-clip:text;color:transparent}
-.mm-cta{background:linear-gradient(96deg,#FBBF24,#F59E0B 55%,#FBBF24);background-size:200% 100%;transition:background-position .6s cubic-bezier(.16,1,.3,1),transform .3s,box-shadow .3s}
-.mm-cta:hover{background-position:100% 0;transform:translateY(-3px);box-shadow:0 22px 48px -18px rgba(251,191,36,.85)}
+.mm-cta{background:linear-gradient(96deg,#1E3A8A,#0B2545 55%,#1E3A8A);background-size:200% 100%;color:#ffffff;transition:background-position .6s cubic-bezier(.16,1,.3,1),transform .3s,box-shadow .3s}
+.mm-cta:hover{background-position:100% 0;transform:translateY(-3px);box-shadow:0 22px 48px -18px rgba(11,37,69,.55)}
 .mm-ghost{transition:transform .3s,border-color .3s,background-color .3s}
 .mm-ghost:hover{transform:translateY(-3px);border-color:rgba(34,211,238,.6);background-color:rgba(8,145,178,.08)}
 .mm-scanline{position:absolute;left:0;right:0;height:34%;background:linear-gradient(180deg,transparent,rgba(34,211,238,.13),transparent);animation:mmScan 5.5s linear infinite;pointer-events:none}
@@ -131,7 +132,6 @@ function MeridianStyles() {
 
 /* focus + accessibility */
 .mm-root a:focus-visible,.mm-root button:focus-visible,.mm-root input:focus-visible,.mm-root select:focus-visible{outline:2px solid #22D3EE;outline-offset:3px;border-radius:12px}
-
 @media (prefers-reduced-motion: reduce){
   .mm-root *,.mm-root *::before,.mm-root *::after{animation-duration:.001ms!important;animation-iteration-count:1!important;transition-duration:.001ms!important}
   .mm-reveal{opacity:1!important;transform:none!important}
@@ -199,7 +199,7 @@ function Counter({ to, prefix = '', suffix = '', decimals = 0, duration = 1600, 
 }
 
 /* --------------------------- IMAGE WITH FALLBACK -------------------------- */
-function Photo({ src, alt, className = '', imgClass = '', tint = 'from-cyan-500/25 via-indigo-500/10 to-amber-500/25' }) {
+function Photo({ src, alt, className = '', imgClass = '', tint = 'from-cyan-500/25 via-indigo-500/10 to-blue-950/25' }) {
   const [failed, setFailed] = useState(false);
   return (
     <div className={`relative overflow-hidden ${className}`}>
@@ -219,7 +219,7 @@ function Photo({ src, alt, className = '', imgClass = '', tint = 'from-cyan-500/
           <polyline points="0,190 40,170 80,180 120,130 160,148 200,96 240,112 280,64 320,84 360,40 400,58"
             fill="none" stroke="#22D3EE" strokeWidth="3" />
           <polyline points="0,215 40,205 80,208 120,182 160,192 200,164 240,172 280,142 320,152 360,124 400,132"
-            fill="none" stroke="#FBBF24" strokeWidth="2" strokeOpacity=".8" />
+            fill="none" stroke="#1E3A8A" strokeWidth="2" strokeOpacity=".8" />
         </svg>
       )}
       <div className="absolute inset-0 z-20 bg-gradient-to-t from-[#060B18] via-[#060B18]/25 to-transparent" />
@@ -240,7 +240,7 @@ function LiveChart({ height = 168 }) {
         <linearGradient id="mmStroke" x1="0" y1="0" x2="1" y2="0">
           <stop offset="0%" stopColor="#22D3EE" />
           <stop offset="55%" stopColor="#34D399" />
-          <stop offset="100%" stopColor="#FBBF24" />
+          <stop offset="100%" stopColor="#1E3A8A" />
         </linearGradient>
       </defs>
       {[30, 60, 90, 120].map((y) => (
@@ -249,8 +249,8 @@ function LiveChart({ height = 168 }) {
       <path d={`${line} L408,150 L0,150 Z`} fill="url(#mmFill)" />
       <path d={line} fill="none" stroke="url(#mmStroke)" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"
         strokeDasharray="1400" style={{ animation: 'mmDraw 2.6s cubic-bezier(.16,1,.3,1) forwards' }} />
-      <circle cx="408" cy="26" r="4" fill="#FBBF24" className="mm-glow" />
-      <circle cx="408" cy="26" r="9" fill="none" stroke="#FBBF24" strokeWidth="1.5"
+      <circle cx="408" cy="26" r="4" fill="#1E3A8A" className="mm-glow" />
+      <circle cx="408" cy="26" r="9" fill="none" stroke="#1E3A8A" strokeWidth="1.5"
         style={{ transformOrigin: '408px 26px', animation: 'mmPulseRing 2.2s ease-out infinite' }} />
     </svg>
   );
@@ -260,10 +260,10 @@ function LiveChart({ height = 168 }) {
 function FloatingGlyphs() {
   const glyphs = [
     { s: '€', top: '12%', left: '6%',  d: '0s',   c: 'text-cyan-600/20',    size: 'text-6xl' },
-    { s: '$', top: '68%', left: '9%',  d: '1.4s', c: 'text-amber-600/20',   size: 'text-5xl' },
+    { s: '$', top: '68%', left: '9%',  d: '1.4s', c: 'text-blue-900/20',   size: 'text-5xl' },
     { s: '¥', top: '22%', right: '8%', d: '.8s',  c: 'text-emerald-600/20', size: 'text-5xl' },
     { s: '£', top: '74%', right: '12%',d: '2.1s', c: 'text-violet-600/20',  size: 'text-6xl' },
-    { s: '₿', top: '44%', right: '4%', d: '1.1s', c: 'text-amber-600/20',   size: 'text-4xl' },
+    { s: '₿', top: '44%', right: '4%', d: '1.1s', c: 'text-blue-900/20',   size: 'text-4xl' },
   ];
   return (
     <div className="pointer-events-none absolute inset-0 hidden md:block" aria-hidden="true">
@@ -282,7 +282,7 @@ function FloatingGlyphs() {
 function Aurora() {
   return (
     <div className="pointer-events-none absolute inset-0 overflow-hidden opacity-40" aria-hidden="true">
-      <div className="absolute -top-40 left-[8%] w-[620px] h-[620px] rounded-full blur-[150px] bg-amber-400/20 mm-drift" />
+      <div className="absolute -top-40 left-[8%] w-[620px] h-[620px] rounded-full blur-[150px] bg-blue-900/15 mm-drift" />
       <div className="absolute top-[18%] right-[2%] w-[560px] h-[560px] rounded-full blur-[150px] bg-cyan-400/20 mm-drift" style={{ animationDelay: '6s' }} />
       <div className="absolute top-[52%] left-[32%] w-[520px] h-[520px] rounded-full blur-[160px] bg-violet-500/18 mm-drift" style={{ animationDelay: '12s' }} />
       <div className="absolute top-[80%] right-[24%] w-[440px] h-[440px] rounded-full blur-[150px] bg-emerald-400/16 mm-drift" style={{ animationDelay: '18s' }} />
@@ -307,7 +307,6 @@ export default function LandingPage() {
   const [errorMsg, setErrorMsg] = useState('');
   const [loading, setLoading] = useState(false);
 
-  // STEP 3: CONNECT FRONTEND AUTHENTICATION TO EXPRESS BACKEND API
   const handleAuthSubmit = async (e) => {
     e.preventDefault();
     setErrorMsg('');
@@ -334,10 +333,8 @@ export default function LandingPage() {
         if (!response.ok || !data.success) {
           throw new Error(data.error || 'Registration failed. Please try again.');
         }
-        // Store active client credentials locally
         localStorage.setItem('current_user', JSON.stringify(data.client));
       } else {
-        // LOGIN MODE
         const response = await fetch('/api/login', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -350,7 +347,6 @@ export default function LandingPage() {
         if (!response.ok || !data.success) {
           throw new Error(data.error || 'Invalid email or password.');
         }
-        // Store active client credentials locally
         localStorage.setItem('current_user', JSON.stringify(data.client));
       }
       setShowAuthModal(false);
@@ -385,9 +381,9 @@ export default function LandingPage() {
     'px-4 py-2 bg-cyan-500/10 hover:bg-cyan-600 hover:text-white border border-cyan-500/40 text-cyan-700 rounded-lg font-sans font-extrabold transition duration-200 hover:shadow-lg';
 
   return (
-    <div className="mm-root min-h-screen bg-white text-[#0b1224] flex flex-col justify-between selection:bg-amber-400 selection:text-slate-950 relative w-full overflow-x-hidden">
+    <div className="mm-root min-h-screen bg-white text-[#0b1224] flex flex-col justify-between selection:bg-blue-900 selection:text-white relative w-screen overflow-x-hidden m-0 p-0">
       <MeridianStyles />
-
+      
       {/* ================= LIVE MARKET TICKER ================= */}
       <div className="relative z-50 bg-[#060B18] text-white border-b border-white/10 backdrop-blur-xl w-full">
         <div className="flex items-center w-full px-4 sm:px-8">
@@ -409,7 +405,7 @@ export default function LandingPage() {
               ))}
             </div>
           </div>
-          <div className="hidden lg:flex items-center gap-2 shrink-0 pl-6 py-2.5 border-l border-white/10 text-[10px] font-bold tracking-[0.14em] text-amber-300 uppercase">
+          <div className="hidden lg:flex items-center gap-2 shrink-0 pl-6 py-2.5 border-l border-white/10 text-[10px] font-bold tracking-[0.14em] text-blue-300 uppercase">
             <Shield className="w-3.5 h-3.5" />
             <span>Tier-1 liquidity</span>
           </div>
@@ -420,11 +416,11 @@ export default function LandingPage() {
       <header className="sticky top-0 z-40 border-b border-slate-200 bg-white/90 backdrop-blur-2xl w-full">
         <div className="w-full px-6 sm:px-12 py-3.5 flex justify-between items-center gap-4">
           <div className="flex items-center gap-3 cursor-pointer group shrink-0" onClick={() => navigate('/')}>
-            <div className="relative p-2.5 rounded-2xl bg-gradient-to-br from-amber-400/25 to-cyan-400/10 border border-amber-400/40 shadow-lg shadow-amber-500/10 transition duration-300 group-hover:border-amber-300">
-              <Shield className="w-5 h-5 text-amber-600 transition duration-300 group-hover:scale-110" />
+            <div className="relative p-2.5 rounded-2xl bg-gradient-to-br from-blue-900/25 to-cyan-400/10 border border-blue-900/40 shadow-lg shadow-blue-900/10 transition duration-300 group-hover:border-blue-700">
+              <Shield className="w-5 h-5 text-blue-900 transition duration-300 group-hover:scale-110" />
             </div>
             <div className="leading-none">
-              <span className="mm-display block text-[17px] font-extrabold tracking-tight text-[#0b1224] transition group-hover:text-amber-600">Meridian</span>
+              <span className="mm-display block text-[17px] font-extrabold tracking-tight text-[#0b1224] transition group-hover:text-blue-900">Meridian</span>
               <span className="mm-num text-[9px] tracking-[0.34em] uppercase text-cyan-600 font-bold">Markets</span>
             </div>
           </div>
@@ -448,7 +444,7 @@ export default function LandingPage() {
             <button
               type="button"
               onClick={() => openAuth('register')}
-              className="mm-cta px-4 sm:px-5 py-2.5 text-slate-950 text-[13px] font-extrabold rounded-xl shadow-lg shadow-amber-500/25 flex items-center gap-2"
+              className="mm-cta px-4 sm:px-5 py-2.5 text-white text-[13px] font-extrabold rounded-xl shadow-lg shadow-blue-900/25 flex items-center gap-2"
             >
               <UserPlus className="w-4 h-4" />
               <span className="hidden xs:inline sm:inline">Open account</span>
@@ -468,7 +464,7 @@ export default function LandingPage() {
             <nav className="w-full px-6 py-4 flex flex-col">
               {navLinks.map((l) => (
                 <a key={l.href} href={l.href} onClick={() => setMobileNav(false)}
-                  className="flex items-center justify-between py-3 text-sm font-medium text-slate-700 border-b border-slate-100 last:border-0 hover:text-amber-600 transition">
+                  className="flex items-center justify-between py-3 text-sm font-medium text-slate-700 border-b border-slate-100 last:border-0 hover:text-blue-900 transition">
                   {l.label}
                   <ChevronRight className="w-4 h-4 text-slate-400" />
                 </a>
@@ -483,9 +479,8 @@ export default function LandingPage() {
       </header>
 
       {/* ================= HERO ================= */}
-      <section className="relative overflow-hidden pt-14 sm:pt-20 pb-20 sm:pb-24 w-full bg-slate-50">
+      <section className="relative overflow-hidden pt-14 sm:pt-20 pb-20 sm:pb-24 w-full bg-white">
         <Aurora />
-        <div className="absolute inset-0 mm-grid pointer-events-none" />
         <FloatingGlyphs />
         <div className="relative z-10 w-full px-6 sm:px-12">
           <div className="grid lg:grid-cols-12 gap-12 lg:gap-10 items-center">
@@ -513,7 +508,7 @@ export default function LandingPage() {
                 <button
                   type="button"
                   onClick={() => openAuth('register')}
-                  className="mm-cta group px-8 py-4 rounded-2xl text-slate-950 font-extrabold text-sm shadow-xl shadow-amber-500/30 flex items-center justify-center gap-2.5"
+                  className="mm-cta group px-8 py-4 rounded-2xl text-white font-extrabold text-sm shadow-xl shadow-blue-900/30 flex items-center justify-center gap-2.5"
                 >
                   <span>Open a live account</span>
                   <ArrowRight className="w-4 h-4 transition-transform duration-300 group-hover:translate-x-1" />
@@ -536,13 +531,13 @@ export default function LandingPage() {
             {/* ---- hero terminal visual ---- */}
             <Reveal delay={180} className="lg:col-span-6">
               <div className="relative mx-auto max-w-[560px] lg:max-w-none">
-                <div className="absolute -inset-6 rounded-[2.5rem] bg-gradient-to-tr from-amber-400/20 via-cyan-400/20 to-violet-500/20 blur-3xl mm-glow" />
+                <div className="absolute -inset-6 rounded-[2.5rem] bg-gradient-to-tr from-blue-900/20 via-cyan-400/20 to-violet-500/20 blur-3xl mm-glow" />
                 <div className="relative mm-card mm-ring rounded-3xl overflow-hidden mm-float">
                   {/* window chrome */}
                   <div className="flex items-center justify-between px-5 py-3.5 border-b border-white/[0.08] bg-white/[0.02]">
                     <div className="flex items-center gap-2">
                       <span className="w-2.5 h-2.5 rounded-full bg-rose-400/80" />
-                      <span className="w-2.5 h-2.5 rounded-full bg-amber-400/80" />
+                      <span className="w-2.5 h-2.5 rounded-full bg-blue-900/80" />
                       <span className="w-2.5 h-2.5 rounded-full bg-emerald-400/80" />
                       <span className="ml-3 mm-num text-[10px] tracking-widest text-slate-400 uppercase">Meridian terminal</span>
                     </div>
@@ -560,7 +555,7 @@ export default function LandingPage() {
                       <div className="mm-num inline-flex items-center gap-1 rounded-lg bg-emerald-400/12 px-2.5 py-1 text-sm font-bold text-emerald-300">
                         <ArrowUpRight className="w-4 h-4" /> +0.18%
                       </div>
-                      <div className="mm-num mt-1.5 text-[10px] text-amber-300">spread 0.2 pips</div>
+                      <div className="mm-num mt-1.5 text-[10px] text-blue-300">spread 0.2 pips</div>
                     </div>
                   </div>
                   {/* chart */}
@@ -585,8 +580,8 @@ export default function LandingPage() {
                 {/* floating side cards */}
                 <div className="hidden sm:block absolute -left-8 bottom-16 mm-card rounded-2xl px-4 py-3 shadow-2xl mm-float-slow" style={{ animationDelay: '1.2s' }}>
                   <div className="flex items-center gap-2.5">
-                    <div className="p-2 rounded-lg bg-amber-400/15 border border-amber-400/30">
-                      <Gauge className="w-4 h-4 text-amber-300" />
+                    <div className="p-2 rounded-lg bg-blue-900/15 border border-blue-900/30">
+                      <Gauge className="w-4 h-4 text-blue-300" />
                     </div>
                     <div>
                       <div className="mm-num text-sm font-bold text-white">11.4 ms</div>
@@ -612,7 +607,7 @@ export default function LandingPage() {
           <div className="mt-20 grid grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-5">
             {[
               { v: <Counter to={4.8} decimals={1} prefix="$" suffix="B+" />, l: 'Daily trading volume', c: 'text-[#0b1224]', i: TrendingUp, ic: 'text-cyan-600' },
-              { v: '0.0 pips', l: 'Raw spreads from', c: 'text-amber-600', i: Activity, ic: 'text-amber-600' },
+              { v: '0.0 pips', l: 'Raw spreads from', c: 'text-blue-900', i: Activity, ic: 'text-blue-900' },
               { v: '1:500', l: 'Flexible leverage', c: 'text-[#0b1224]', i: Layers, ic: 'text-violet-600' },
               { v: <><span>&lt; </span><Counter to={12} suffix="ms" /></>, l: 'Equinix NY4 execution', c: 'text-emerald-600', i: Cpu, ic: 'text-emerald-600' },
             ].map((s, i) => (
@@ -635,7 +630,7 @@ export default function LandingPage() {
               <React.Fragment key={r}>
                 {['Equinix NY4', 'LD4 London', 'TY3 Tokyo', 'Barclays LP', 'Citi Velocity', 'Jump Liquidity', 'XTX Markets', 'Segregated Tier-1 custody'].map((n, i) => (
                   <span key={`${r}-${i}`} className="flex items-center gap-2.5 whitespace-nowrap text-[13px] font-semibold text-slate-600">
-                    <Award className="w-4 h-4 text-amber-500" />
+                    <Award className="w-4 h-4 text-blue-900" />
                     {n}
                   </span>
                 ))}
@@ -706,7 +701,7 @@ export default function LandingPage() {
                         </td>
                         <td className="p-5 text-slate-700 font-bold">1.08420</td>
                         <td className="p-5 text-slate-700 font-bold">1.08422</td>
-                        <td className="p-5 text-amber-600 font-bold">0.2 pips</td>
+                        <td className="p-5 text-blue-900 font-bold">0.2 pips</td>
                         <td className="p-5 text-emerald-600 font-bold">
                           <div className="flex items-center gap-1"><ArrowUpRight className="w-3.5 h-3.5" /><span>+0.18%</span></div>
                         </td>
@@ -723,7 +718,7 @@ export default function LandingPage() {
                         </td>
                         <td className="p-5 text-slate-700 font-bold">1.26510</td>
                         <td className="p-5 text-slate-700 font-bold">1.26513</td>
-                        <td className="p-5 text-amber-600 font-bold">0.3 pips</td>
+                        <td className="p-5 text-blue-900 font-bold">0.3 pips</td>
                         <td className="p-5 text-emerald-600 font-bold">
                           <div className="flex items-center gap-1"><ArrowUpRight className="w-3.5 h-3.5" /><span>+0.24%</span></div>
                         </td>
@@ -740,7 +735,7 @@ export default function LandingPage() {
                         </td>
                         <td className="p-5 text-slate-700 font-bold">155.120</td>
                         <td className="p-5 text-slate-700 font-bold">155.124</td>
-                        <td className="p-5 text-amber-600 font-bold">0.4 pips</td>
+                        <td className="p-5 text-blue-900 font-bold">0.4 pips</td>
                         <td className="p-5 text-rose-600 font-bold">
                           <div className="flex items-center gap-1"><ArrowDownRight className="w-3.5 h-3.5" /><span>-0.12%</span></div>
                         </td>
@@ -761,7 +756,7 @@ export default function LandingPage() {
                         </td>
                         <td className="p-5 text-slate-700 font-bold">64,210.00</td>
                         <td className="p-5 text-slate-700 font-bold">64,212.50</td>
-                        <td className="p-5 text-amber-600 font-bold">2.5 pips</td>
+                        <td className="p-5 text-blue-900 font-bold">2.5 pips</td>
                         <td className="p-5 text-emerald-600 font-bold">
                           <div className="flex items-center gap-1"><ArrowUpRight className="w-3.5 h-3.5" /><span>+2.41%</span></div>
                         </td>
@@ -778,7 +773,7 @@ export default function LandingPage() {
                         </td>
                         <td className="p-5 text-slate-700 font-bold">3,480.10</td>
                         <td className="p-5 text-slate-700 font-bold">3,480.90</td>
-                        <td className="p-5 text-amber-600 font-bold">0.8 pips</td>
+                        <td className="p-5 text-blue-900 font-bold">0.8 pips</td>
                         <td className="p-5 text-emerald-600 font-bold">
                           <div className="flex items-center gap-1"><ArrowUpRight className="w-3.5 h-3.5" /><span>+3.15%</span></div>
                         </td>
@@ -799,7 +794,7 @@ export default function LandingPage() {
                         </td>
                         <td className="p-5 text-slate-700 font-bold">2,384.10</td>
                         <td className="p-5 text-slate-700 font-bold">2,384.30</td>
-                        <td className="p-5 text-amber-600 font-bold">0.2 pips</td>
+                        <td className="p-5 text-blue-900 font-bold">0.2 pips</td>
                         <td className="p-5 text-emerald-600 font-bold">
                           <div className="flex items-center gap-1"><ArrowUpRight className="w-3.5 h-3.5" /><span>+0.85%</span></div>
                         </td>
@@ -817,12 +812,12 @@ export default function LandingPage() {
       </section>
 
       {/* ================= TERMINAL SHOWCASE ================= */}
-      <section id="features" className="relative py-20 sm:py-24 overflow-hidden bg-slate-50">
-        <div className="absolute top-10 right-0 w-[560px] h-[560px] rounded-full bg-amber-500/5 blur-[160px] pointer-events-none" />
+      <section id="features" className="relative py-20 sm:py-24 overflow-hidden bg-white">
+        <div className="absolute top-10 right-0 w-[560px] h-[560px] rounded-full bg-blue-900/5 blur-[160px] pointer-events-none" />
         <div className="relative w-full px-6 sm:px-12 grid lg:grid-cols-2 gap-14 items-center">
           <Reveal>
             <div className="relative">
-              <div className="absolute -inset-5 rounded-[2rem] bg-gradient-to-br from-cyan-400/20 to-amber-400/20 blur-2xl" />
+              <div className="absolute -inset-5 rounded-[2rem] bg-gradient-to-br from-cyan-400/20 to-blue-900/20 blur-2xl" />
               <Photo
                 src={IMG.terminal}
                 alt="Multi-monitor forex trading terminal showing live charts"
@@ -856,14 +851,14 @@ export default function LandingPage() {
             <div className="mt-9 space-y-3.5">
               {[
                 { i: BarChart2, t: 'One-click execution', d: 'Market, limit and stop orders fill straight against streaming liquidity.', c: 'cyan' },
-                { i: Gauge, t: 'Live risk view', d: 'Margin level, equity and exposure recalculate on every tick.', c: 'amber' },
+                { i: Gauge, t: 'Live risk view', d: 'Margin level, equity and exposure recalculate on every tick.', c: 'blue' },
                 { i: Cpu, t: 'Algo and EA ready', d: 'Full API and expert-advisor support on the Raw ECN tier.', c: 'violet' },
               ].map((f, i) => (
                 <Reveal key={i} delay={i * 110}
                   className="bg-white border border-slate-200 shadow-sm rounded-2xl p-5 flex items-start gap-4 hover:shadow-md transition">
                   <div className={`shrink-0 p-3 rounded-xl border ${
                     f.c === 'cyan' ? 'bg-cyan-50 border-cyan-200 text-cyan-700' :
-                    f.c === 'amber' ? 'bg-amber-50 border-amber-200 text-amber-700' :
+                    f.c === 'blue' ? 'bg-blue-50 border-blue-200 text-blue-900' :
                     'bg-violet-50 border-violet-200 text-violet-700'}`}>
                     <f.i className="w-5 h-5" />
                   </div>
@@ -892,7 +887,7 @@ export default function LandingPage() {
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
             {[
               { i: BarChart2, img: IMG.charts, t: 'Real-time terminal execution', d: 'Live floating P&L, margin alerts and single-click position closure built into the web terminal.', tint: 'from-cyan-500/20 to-blue-600/10', ring: 'border-cyan-200 bg-cyan-50', ic: 'text-cyan-700' },
-              { i: Globe, img: IMG.currency, t: 'Regional wallet funding', d: 'Instant deposits via Coins.ph, Luno, Binance Pay and direct USDT TRC-20 transfers.', tint: 'from-amber-500/20 to-orange-600/10', ring: 'border-amber-200 bg-amber-50', ic: 'text-amber-700' },
+              { i: Globe, img: IMG.currency, t: 'Regional wallet funding', d: 'Instant deposits via Coins.ph, Luno, Binance Pay and direct USDT TRC-20 transfers.', tint: 'from-blue-900/20 to-indigo-900/10', ring: 'border-blue-200 bg-blue-50', ic: 'text-blue-900' },
               { i: Lock, img: IMG.vault, t: 'Bank-grade segregation', d: 'Client capital sits in segregated Tier-1 bank accounts, held apart from broker operating funds.', tint: 'from-violet-500/20 to-fuchsia-600/10', ring: 'border-violet-200 bg-violet-50', ic: 'text-violet-700' },
             ].map((f, i) => (
               <Reveal key={i} delay={i * 120}
@@ -913,8 +908,8 @@ export default function LandingPage() {
       </section>
 
       {/* ================= ACCOUNT TIERS ================= */}
-      <section id="accounts" className="relative py-20 sm:py-24 w-full overflow-hidden bg-slate-50">
-        <div className="absolute top-1/3 left-1/2 -translate-x-1/2 w-[720px] h-[520px] rounded-full bg-amber-500/5 blur-[170px] pointer-events-none" />
+      <section id="accounts" className="relative py-20 sm:py-24 w-full overflow-hidden bg-white">
+        <div className="absolute top-1/3 left-1/2 -translate-x-1/2 w-[720px] h-[520px] rounded-full bg-blue-900/5 blur-[170px] pointer-events-none" />
         <div className="relative w-full px-6 sm:px-12">
           <Reveal className="text-center max-w-2xl mx-auto mb-14">
             <h2 className="mm-display text-3xl sm:text-4xl lg:text-5xl font-extrabold text-[#0b1224] leading-tight">
@@ -954,17 +949,16 @@ export default function LandingPage() {
                 Select Standard
               </button>
             </Reveal>
-
             {/* RAW ECN — FEATURED */}
             <Reveal delay={110} className="relative md:-mt-4">
-              <div className="absolute -inset-4 rounded-[2rem] bg-gradient-to-b from-amber-400/20 to-transparent blur-2xl mm-glow" />
-              <div className="relative rounded-3xl p-7 sm:p-8 flex flex-col justify-between h-full border-2 border-amber-500 bg-gradient-to-b from-amber-50/[0.9] via-[#0B1224] to-[#080D1B] text-white shadow-2xl shadow-amber-500/10">
-                <div className="absolute -top-3.5 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-full bg-gradient-to-r from-amber-300 to-amber-500 px-4 py-1.5 text-[10px] font-extrabold tracking-[0.14em] uppercase text-slate-950 shadow-lg shadow-amber-500/40">
+              <div className="absolute -inset-4 rounded-[2rem] bg-gradient-to-b from-blue-900/20 to-transparent blur-2xl mm-glow" />
+              <div className="relative rounded-3xl p-7 sm:p-8 flex flex-col justify-between h-full border-2 border-blue-900 bg-gradient-to-b from-blue-950/[0.9] via-[#0B1224] to-[#080D1B] text-white shadow-2xl shadow-blue-900/10">
+                <div className="absolute -top-3.5 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-full bg-gradient-to-r from-blue-400 to-blue-600 px-4 py-1.5 text-[10px] font-extrabold tracking-[0.14em] uppercase text-white shadow-lg shadow-blue-900/40">
                   Most popular
                 </div>
                 <div>
-                  <div className="flex items-center gap-2 text-[11px] font-bold text-amber-300 mb-4 mt-1">
-                    <Zap className="w-4 h-4 fill-amber-300" /><span>Scalpers &amp; algorithmic</span>
+                  <div className="flex items-center gap-2 text-[11px] font-bold text-blue-300 mb-4 mt-1">
+                    <Zap className="w-4 h-4 fill-blue-300" /><span>Scalpers &amp; algorithmic</span>
                   </div>
                   <h3 className="mm-display text-2xl font-bold text-white">Raw ECN Suite</h3>
                   <p className="mt-2.5 text-[13px] text-slate-300 leading-relaxed">
@@ -974,23 +968,22 @@ export default function LandingPage() {
                     <span className="mm-num text-[2.75rem] leading-none font-bold mm-gold-text">$1,000</span>
                     <span className="text-xs text-slate-400">min deposit</span>
                   </div>
-                  <ul className="mt-7 space-y-3.5 text-[13px] text-slate-200 border-t border-amber-400/25 pt-6">
+                  <ul className="mt-7 space-y-3.5 text-[13px] text-slate-200 border-t border-blue-400/25 pt-6">
                     {['Raw spreads from 0.0 pips', '$3.50 per lot commission', 'Equinix NY4 direct server', 'Full EA & algo support'].map((x) => (
                       <li key={x} className="flex items-center gap-3">
-                        <CheckCircle2 className="w-4 h-4 text-amber-300 shrink-0" /><span>{x}</span>
+                        <CheckCircle2 className="w-4 h-4 text-blue-300 shrink-0" /><span>{x}</span>
                       </li>
                     ))}
                   </ul>
                 </div>
                 <button
                   onClick={() => openAuth('register')}
-                  className="mm-cta mt-8 w-full py-4 rounded-xl text-slate-950 font-extrabold text-[13px] shadow-lg shadow-amber-500/35"
+                  className="mm-cta mt-8 w-full py-4 rounded-xl text-white font-extrabold text-[13px] shadow-lg shadow-blue-900/35"
                 >
                   Open Raw ECN account
                 </button>
               </div>
             </Reveal>
-
             {/* VIP PRIME */}
             <Reveal delay={220} id="institutional" className="bg-white border border-slate-200 shadow-sm rounded-3xl p-7 sm:p-8 flex flex-col justify-between h-full">
               <div>
@@ -1045,7 +1038,7 @@ export default function LandingPage() {
               {[
                 { v: <Counter to={99.98} decimals={2} suffix="%" />, l: 'Platform uptime', c: 'text-emerald-700' },
                 { v: <Counter to={186} suffix="+" />, l: 'Countries served', c: 'text-cyan-700' },
-                { v: <Counter to={120} suffix="+" />, l: 'Tradable instruments', c: 'text-amber-600' },
+                { v: <Counter to={120} suffix="+" />, l: 'Tradable instruments', c: 'text-blue-900' },
                 { v: '24 / 5', l: 'Desk coverage', c: 'text-violet-700' },
               ].map((s, i) => (
                 <Reveal key={i} delay={i * 90} className="bg-slate-50 border border-slate-200 rounded-2xl p-5">
@@ -1062,7 +1055,7 @@ export default function LandingPage() {
                 src={IMG.skyline}
                 alt="Global financial district at dusk"
                 className="relative rounded-3xl border border-slate-200 aspect-[5/4] shadow-2xl"
-                tint="from-emerald-500/20 via-cyan-500/10 to-blue-600/20"
+                tint="from-emerald-500/20 via-cyan-500/10 to-blue-900/20"
                 imgClass="transition duration-700 hover:scale-105"
               />
               <div className="absolute z-30 top-5 right-5 mm-card rounded-2xl px-4 py-3 flex items-center gap-3 mm-float">
@@ -1078,7 +1071,7 @@ export default function LandingPage() {
       </section>
 
       {/* ================= TRADERS / SOCIAL PROOF ================= */}
-      <section className="relative py-20 sm:py-24 w-full bg-slate-50">
+      <section className="relative py-20 sm:py-24 w-full bg-white">
         <div className="w-full px-6 sm:px-12">
           <Reveal className="max-w-2xl mb-14">
             <h2 className="mm-display text-3xl sm:text-4xl font-extrabold text-[#0b1224] leading-tight">
@@ -1090,7 +1083,7 @@ export default function LandingPage() {
           </Reveal>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
             {[
-              { q: 'Slippage was eating a third of my edge on the old broker. On the Raw tier my backtest and my live curve finally look like the same strategy.', n: 'Daniel R.', r: 'Systematic FX, London', img: IMG.trader, a: 'text-amber-500' },
+              { q: 'Slippage was eating a third of my edge on the old broker. On the Raw tier my backtest and my live curve finally look like the same strategy.', n: 'Daniel R.', r: 'Systematic FX, London', img: IMG.trader, a: 'text-blue-900' },
               { q: 'Funded with USDT at 11pm and had positions open before midnight. The deposit rail is the reason I stopped shopping around.', n: 'Amara O.', r: 'Discretionary swing, Lagos', img: IMG.desk, a: 'text-cyan-600' },
               { q: 'The margin view updates fast enough that I can size properly during news. That sounds small until you have traded without it.', n: 'Kenji T.', r: 'Intraday gold, Singapore', img: IMG.analytics, a: 'text-violet-600' },
             ].map((t, i) => (
@@ -1118,13 +1111,12 @@ export default function LandingPage() {
       {/* ================= CLOSING CTA ================= */}
       <section className="relative py-20 sm:py-24 px-6 sm:px-12 bg-white w-full">
         <Reveal className="relative w-full">
-          <div className="absolute -inset-6 rounded-[2.5rem] bg-gradient-to-r from-amber-400/20 via-cyan-400/20 to-violet-500/20 blur-3xl mm-glow" />
+          <div className="absolute -inset-6 rounded-[2.5rem] bg-gradient-to-r from-blue-900/20 via-cyan-400/20 to-violet-500/20 blur-3xl mm-glow" />
           <div className="relative overflow-hidden rounded-[2rem] border border-slate-200 bg-gradient-to-br from-[#0D1730] via-[#0A1024] to-[#070C1B] px-7 sm:px-14 py-14 sm:py-16 text-center text-white shadow-2xl">
-            <div className="absolute inset-0 mm-grid opacity-60 pointer-events-none" />
-            <div className="absolute -top-24 -right-16 w-72 h-72 rounded-full bg-amber-400/20 blur-[110px] mm-drift" />
+            <div className="absolute -top-24 -right-16 w-72 h-72 rounded-full bg-blue-900/20 blur-[110px] mm-drift" />
             <div className="absolute -bottom-24 -left-16 w-72 h-72 rounded-full bg-cyan-400/20 blur-[110px] mm-drift" style={{ animationDelay: '8s' }} />
             <div className="relative">
-              <div className="inline-flex items-center gap-2 rounded-full border border-amber-400/35 bg-amber-400/10 px-4 py-2 text-[11px] font-semibold text-amber-200">
+              <div className="inline-flex items-center gap-2 rounded-full border border-blue-400/35 bg-blue-900/30 px-4 py-2 text-[11px] font-semibold text-blue-200">
                 <Clock className="w-3.5 h-3.5" /> Accounts open in under two minutes
               </div>
               <h2 className="mm-display mt-7 text-3xl sm:text-5xl font-extrabold text-white leading-[1.08] max-w-3xl mx-auto">
@@ -1137,7 +1129,7 @@ export default function LandingPage() {
                 <button
                   type="button"
                   onClick={() => openAuth('register')}
-                  className="mm-cta group px-8 py-4 rounded-2xl text-slate-950 font-extrabold text-sm shadow-xl shadow-amber-500/30 flex items-center justify-center gap-2.5"
+                  className="mm-cta group px-8 py-4 rounded-2xl text-white font-extrabold text-sm shadow-xl shadow-blue-900/30 flex items-center justify-center gap-2.5"
                 >
                   <span>Open a live account</span>
                   <ArrowRight className="w-4 h-4 transition-transform duration-300 group-hover:translate-x-1" />
@@ -1161,8 +1153,8 @@ export default function LandingPage() {
         <div className="w-full px-6 sm:px-12 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-10 lg:gap-12 mb-14">
           <div className="space-y-4">
             <div className="flex items-center gap-3">
-              <div className="p-2 rounded-xl bg-amber-400/15 border border-amber-400/30">
-                <Shield className="w-4 h-4 text-amber-300" />
+              <div className="p-2 rounded-xl bg-blue-900/30 border border-blue-400/30">
+                <Shield className="w-4 h-4 text-blue-300" />
               </div>
               <span className="mm-display font-extrabold text-white tracking-tight text-base">Meridian Markets</span>
             </div>
@@ -1178,10 +1170,10 @@ export default function LandingPage() {
           <div>
             <h4 className="mm-display font-bold text-white text-[13px] mb-5">Navigation</h4>
             <ul className="space-y-3 text-[12px]">
-              <li><a href="#markets" className="hover:text-amber-300 transition">Market prices</a></li>
-              <li><a href="#accounts" className="hover:text-amber-300 transition">Account comparison</a></li>
-              <li><a href="#features" className="hover:text-amber-300 transition">Trading platform</a></li>
-              <li><a href="#security" className="hover:text-amber-300 transition">Fund security</a></li>
+              <li><a href="#markets" className="hover:text-blue-300 transition">Market prices</a></li>
+              <li><a href="#accounts" className="hover:text-blue-300 transition">Account comparison</a></li>
+              <li><a href="#features" className="hover:text-blue-300 transition">Trading platform</a></li>
+              <li><a href="#security" className="hover:text-blue-300 transition">Fund security</a></li>
             </ul>
           </div>
           <div>
@@ -1195,14 +1187,14 @@ export default function LandingPage() {
           <div>
             <h4 className="mm-display font-bold text-white text-[13px] mb-5">Institutional support</h4>
             <div className="space-y-3 text-[12px]">
-              <a href="mailto:support@meridianmarkets.com" className="flex items-center gap-2.5 hover:text-amber-300 transition">
-                <Mail className="w-4 h-4 text-amber-400" /> <span>support@meridianmarkets.com</span>
+              <a href="mailto:support@meridianmarkets.com" className="flex items-center gap-2.5 hover:text-blue-300 transition">
+                <Mail className="w-4 h-4 text-blue-400" /> <span>support@meridianmarkets.com</span>
               </a>
-              <a href="tel:+442079460912" className="flex items-center gap-2.5 hover:text-amber-300 transition">
-                <Phone className="w-4 h-4 text-amber-400" /> <span>+44 20 7946 0912</span>
+              <a href="tel:+442079460912" className="flex items-center gap-2.5 hover:text-blue-300 transition">
+                <Phone className="w-4 h-4 text-blue-400" /> <span>+44 20 7946 0912</span>
               </a>
               <div className="flex items-center gap-2.5 text-slate-500">
-                <HelpCircle className="w-4 h-4 text-amber-400" /> <span>Desk open 24/5</span>
+                <HelpCircle className="w-4 h-4 text-blue-400" /> <span>Desk open 24/5</span>
               </div>
             </div>
           </div>
@@ -1216,7 +1208,7 @@ export default function LandingPage() {
       {showAuthModal && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-md flex items-center justify-center p-4 z-50 overflow-y-auto">
           <div className="relative w-full max-w-md my-auto">
-            <div className="absolute -inset-4 rounded-[2rem] bg-gradient-to-br from-amber-400/25 to-cyan-400/20 blur-2xl pointer-events-none" />
+            <div className="absolute -inset-4 rounded-[2rem] bg-gradient-to-br from-blue-900/25 to-cyan-400/20 blur-2xl pointer-events-none" />
             <div className="relative rounded-3xl border border-slate-200 bg-white p-7 sm:p-8 shadow-2xl text-[#0b1224]">
               <div className="flex justify-between items-start mb-6 gap-4">
                 <div>
@@ -1255,7 +1247,7 @@ export default function LandingPage() {
                         placeholder="e.g. John Doe"
                         value={formData.fullName}
                         onChange={(e) => setFormData({...formData, fullName: e.target.value})}
-                        className="w-full bg-slate-50 border border-slate-300 rounded-xl px-4 py-3 text-[13px] text-[#0b1224] placeholder-slate-400 focus:outline-none focus:border-amber-500 focus:bg-white transition"
+                        className="w-full bg-slate-50 border border-slate-300 rounded-xl px-4 py-3 text-[13px] text-[#0b1224] placeholder-slate-400 focus:outline-none focus:border-blue-900 focus:bg-white transition"
                       />
                     </div>
                     <div>
@@ -1266,7 +1258,7 @@ export default function LandingPage() {
                         placeholder="trader@meridian.com"
                         value={formData.email}
                         onChange={(e) => setFormData({...formData, email: e.target.value})}
-                        className="w-full bg-slate-50 border border-slate-300 rounded-xl px-4 py-3 text-[13px] text-[#0b1224] placeholder-slate-400 focus:outline-none focus:border-amber-500 focus:bg-white transition"
+                        className="w-full bg-slate-50 border border-slate-300 rounded-xl px-4 py-3 text-[13px] text-[#0b1224] placeholder-slate-400 focus:outline-none focus:border-blue-900 focus:bg-white transition"
                       />
                     </div>
                     <div>
@@ -1275,7 +1267,7 @@ export default function LandingPage() {
                         <select
                           value={formData.countryCode}
                           onChange={(e) => setFormData({...formData, countryCode: e.target.value})}
-                          className="mm-num bg-slate-50 border border-slate-300 rounded-xl px-2.5 py-3 text-[13px] text-[#0b1224] focus:outline-none focus:border-amber-500 max-w-[7.5rem]"
+                          className="mm-num bg-slate-50 border border-slate-300 rounded-xl px-2.5 py-3 text-[13px] text-[#0b1224] focus:outline-none focus:border-blue-900 max-w-[7.5rem]"
                         >
                           {COUNTRY_CODES.map((item) => (
                             <option key={item.code} value={item.code} className="bg-white">
@@ -1289,7 +1281,7 @@ export default function LandingPage() {
                           placeholder="(555) 000-0000"
                           value={formData.phone}
                           onChange={(e) => setFormData({...formData, phone: e.target.value})}
-                          className="w-full bg-slate-50 border border-slate-300 rounded-xl px-4 py-3 text-[13px] text-[#0b1224] placeholder-slate-400 focus:outline-none focus:border-amber-500 focus:bg-white transition"
+                          className="w-full bg-slate-50 border border-slate-300 rounded-xl px-4 py-3 text-[13px] text-[#0b1224] placeholder-slate-400 focus:outline-none focus:border-blue-900 focus:bg-white transition"
                         />
                       </div>
                     </div>
@@ -1301,7 +1293,7 @@ export default function LandingPage() {
                         placeholder="••••••••••••"
                         value={formData.password}
                         onChange={(e) => setFormData({...formData, password: e.target.value})}
-                        className="w-full bg-slate-50 border border-slate-300 rounded-xl px-4 py-3 text-[13px] text-[#0b1224] placeholder-slate-400 focus:outline-none focus:border-amber-500 focus:bg-white transition"
+                        className="w-full bg-slate-50 border border-slate-300 rounded-xl px-4 py-3 text-[13px] text-[#0b1224] placeholder-slate-400 focus:outline-none focus:border-blue-900 focus:bg-white transition"
                       />
                     </div>
                     <div>
@@ -1312,7 +1304,7 @@ export default function LandingPage() {
                         placeholder="••••••••••••"
                         value={formData.confirmPassword}
                         onChange={(e) => setFormData({...formData, confirmPassword: e.target.value})}
-                        className="w-full bg-slate-50 border border-slate-300 rounded-xl px-4 py-3 text-[13px] text-[#0b1224] placeholder-slate-400 focus:outline-none focus:border-amber-500 focus:bg-white transition"
+                        className="w-full bg-slate-50 border border-slate-300 rounded-xl px-4 py-3 text-[13px] text-[#0b1224] placeholder-slate-400 focus:outline-none focus:border-blue-900 focus:bg-white transition"
                       />
                     </div>
                   </>
@@ -1327,7 +1319,7 @@ export default function LandingPage() {
                         placeholder="trader@meridian.com"
                         value={formData.email}
                         onChange={(e) => setFormData({...formData, email: e.target.value})}
-                        className="mm-num w-full bg-slate-50 border border-slate-300 rounded-xl px-4 py-3 text-[13px] text-[#0b1224] placeholder-slate-400 focus:outline-none focus:border-amber-500 focus:bg-white transition"
+                        className="mm-num w-full bg-slate-50 border border-slate-300 rounded-xl px-4 py-3 text-[13px] text-[#0b1224] placeholder-slate-400 focus:outline-none focus:border-blue-900 focus:bg-white transition"
                       />
                     </div>
                     <div>
@@ -1338,7 +1330,7 @@ export default function LandingPage() {
                         placeholder="••••••••••••"
                         value={formData.password}
                         onChange={(e) => setFormData({...formData, password: e.target.value})}
-                        className="mm-num w-full bg-slate-50 border border-slate-300 rounded-xl px-4 py-3 text-[13px] text-[#0b1224] placeholder-slate-400 focus:outline-none focus:border-amber-500 focus:bg-white transition"
+                        className="mm-num w-full bg-slate-50 border border-slate-300 rounded-xl px-4 py-3 text-[13px] text-[#0b1224] placeholder-slate-400 focus:outline-none focus:border-blue-900 focus:bg-white transition"
                       />
                     </div>
                   </>
@@ -1346,7 +1338,7 @@ export default function LandingPage() {
                 <button
                   type="submit"
                   disabled={loading}
-                  className="mm-cta w-full py-3.5 disabled:opacity-50 disabled:cursor-not-allowed text-slate-950 font-extrabold text-[13px] rounded-xl mt-5 shadow-lg shadow-amber-500/25"
+                  className="mm-cta w-full py-3.5 disabled:opacity-50 disabled:cursor-not-allowed text-white font-extrabold text-[13px] rounded-xl mt-5 shadow-lg shadow-blue-900/25"
                 >
                   {loading
                     ? 'Processing...'
