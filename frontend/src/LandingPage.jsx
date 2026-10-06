@@ -75,7 +75,9 @@ function MeridianStyles() {
   return (
     <style>{`
 @import url('https://fonts.googleapis.com/css2?family=Sora:wght@500;600;700;800&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap');
-html, body { margin: 0; padding: 0; width: 100%; overflow-x: hidden; background-color: #ffffff; }
+html, body { margin: 0 !important; padding: 0 !important; width: 100% !important; max-width: none !important; min-width: 0 !important; overflow-x: hidden; background-color: #ffffff !important; display: block !important; place-items: stretch !important; }
+/* full-screen fix: remove any width cap / centering / padding from the app mount point */
+#root, #app, body > div#root { width: 100% !important; max-width: none !important; min-width: 0 !important; margin: 0 !important; padding: 0 !important; text-align: left !important; display: block !important; }
 .mm-root{font-family:'Inter',ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;-webkit-font-smoothing:antialiased; background-color: #ffffff; color: #0b1224; width: 100%; min-width: 100%; max-width: 100%; overflow-x: hidden; margin: 0; padding: 0; box-sizing: border-box;}
 .mm-root *, .mm-root *::before, .mm-root *::after { box-sizing: border-box; }
 .mm-display{font-family:'Sora','Inter',ui-sans-serif,system-ui,sans-serif;letter-spacing:-.025em;}
