@@ -30,7 +30,6 @@ import {
   Star,
   Clock
 } from 'lucide-react';
-
 const COUNTRY_CODES = [
   { code: '+1', country: 'US / Canada' },
   { code: '+44', country: 'United Kingdom' },
@@ -46,7 +45,6 @@ const COUNTRY_CODES = [
   { code: '+65', country: 'Singapore' },
   { code: '+63', country: 'Philippines' },
 ];
-
 /* ---------------------------------------------------------------------------
    PRESENTATION ASSETS (visual only — swap these URLs for your own art anytime)
    Every <Photo> falls back to an animated gradient + chart artwork if the
@@ -62,7 +60,6 @@ const IMG = {
   vault:     'https://images.unsplash.com/photo-1560221328-12fe60f83ab8?auto=format&fit=crop&w=1200&q=80',
   analytics: 'https://images.unsplash.com/photo-1518186285589-2f7649de83e0?auto=format&fit=crop&w=1200&q=80'
 };
-
 const TICKER = [
   { pair: 'EUR/USD', px: '1.0842 / 1.0843', chg: '+0.18%', up: true },
   { pair: 'GBP/USD', px: '1.2651 / 1.2652', chg: '+0.24%', up: true },
@@ -73,18 +70,16 @@ const TICKER = [
   { pair: 'USD/CHF', px: '0.9042 / 0.9044', chg: '-0.07%', up: false },
   { pair: 'ETH/USD', px: '3,480.10', chg: '+3.15%', up: true },
 ];
-
 /* --------------------------- STYLES (scoped, additive) -------------------- */
 function MeridianStyles() {
   return (
     <style>{`
 @import url('https://fonts.googleapis.com/css2?family=Sora:wght@500;600;700;800&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap');
-html, body { margin: 0; padding: 0; width: 100vw; overflow-x: hidden; background-color: #ffffff; }
-.mm-root{font-family:'Inter',ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;-webkit-font-smoothing:antialiased; background-color: #ffffff; color: #0b1224; width: 100vw; min-width: 100vw; max-width: 100vw; overflow-x: hidden; margin: 0; padding: 0; box-sizing: border-box;}
+html, body { margin: 0; padding: 0; width: 100%; overflow-x: hidden; background-color: #ffffff; }
+.mm-root{font-family:'Inter',ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;-webkit-font-smoothing:antialiased; background-color: #ffffff; color: #0b1224; width: 100%; min-width: 100%; max-width: 100%; overflow-x: hidden; margin: 0; padding: 0; box-sizing: border-box;}
 .mm-root *, .mm-root *::before, .mm-root *::after { box-sizing: border-box; }
 .mm-display{font-family:'Sora','Inter',ui-sans-serif,system-ui,sans-serif;letter-spacing:-.025em;}
 .mm-num{font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,Menlo,monospace;font-variant-numeric:tabular-nums;}
-
 /* ---- motion ---- */
 @keyframes mmFloat{0%,100%{transform:translate3d(0,0,0)}50%{transform:translate3d(0,-16px,0)}}
 @keyframes mmFloatSlow{0%,100%{transform:translate3d(0,0,0) rotate(0)}50%{transform:translate3d(0,-26px,0) rotate(4deg)}}
@@ -97,24 +92,20 @@ html, body { margin: 0; padding: 0; width: 100vw; overflow-x: hidden; background
 @keyframes mmScan{0%{transform:translateY(-100%)}100%{transform:translateY(900%)}}
 @keyframes mmSpinSlow{to{transform:rotate(360deg)}}
 @keyframes mmTick{0%,100%{transform:translateY(0)}50%{transform:translateY(-3px)}}
-
 .mm-float{animation:mmFloat 6s ease-in-out infinite}
 .mm-float-slow{animation:mmFloatSlow 11s ease-in-out infinite}
 .mm-drift{animation:mmDrift 26s ease-in-out infinite}
 .mm-spin-slow{animation:mmSpinSlow 34s linear infinite}
 .mm-glow{animation:mmGlow 3.6s ease-in-out infinite}
 .mm-tick{animation:mmTick 2.4s ease-in-out infinite}
-
 /* ---- scroll reveal ---- */
 .mm-reveal{opacity:0;transform:translate3d(0,26px,0);transition:opacity .7s cubic-bezier(.16,1,.3,1),transform .7s cubic-bezier(.16,1,.3,1)}
 .mm-reveal.mm-in{opacity:1;transform:none}
-
 /* ---- marquee ---- */
 .mm-marquee{display:flex;width:max-content;animation:mmMarquee 42s linear infinite}
 .mm-marquee-fast{animation-duration:26s}
 .mm-marquee:hover{animation-play-state:paused}
 .mm-fade-x{-webkit-mask-image:linear-gradient(90deg,transparent,#000 6%,#000 94%,transparent);mask-image:linear-gradient(90deg,transparent,#000 6%,#000 94%,transparent)}
-
 /* ---- surfaces (Clean white background, dark blue accents replacing orange) ---- */
 .mm-card{background:linear-gradient(158deg,#0A1024,#060B18);border:1px solid rgba(11,18,36,.15);color:#ffffff;box-shadow:0 10px 30px -10px rgba(11,18,36,0.12)}
 .mm-card-hover{transition:transform .45s cubic-bezier(.16,1,.3,1),border-color .35s,box-shadow .45s}
@@ -129,7 +120,6 @@ html, body { margin: 0; padding: 0; width: 100vw; overflow-x: hidden; background
 .mm-ghost:hover{transform:translateY(-3px);border-color:rgba(34,211,238,.6);background-color:rgba(8,145,178,.08)}
 .mm-scanline{position:absolute;left:0;right:0;height:34%;background:linear-gradient(180deg,transparent,rgba(34,211,238,.13),transparent);animation:mmScan 5.5s linear infinite;pointer-events:none}
 .mm-noise{background-image:radial-gradient(rgba(255,255,255,.05) 1px,transparent 1px);background-size:4px 4px}
-
 /* focus + accessibility */
 .mm-root a:focus-visible,.mm-root button:focus-visible,.mm-root input:focus-visible,.mm-root select:focus-visible{outline:2px solid #22D3EE;outline-offset:3px;border-radius:12px}
 @media (prefers-reduced-motion: reduce){
@@ -139,7 +129,6 @@ html, body { margin: 0; padding: 0; width: 100vw; overflow-x: hidden; background
 `}</style>
   );
 }
-
 /* --------------------------- REVEAL ON SCROLL ----------------------------- */
 function Reveal({ children, delay = 0, className = '', as: Tag = 'div', ...rest }) {
   const ref = useRef(null);
@@ -166,7 +155,6 @@ function Reveal({ children, delay = 0, className = '', as: Tag = 'div', ...rest 
     </Tag>
   );
 }
-
 /* --------------------------- COUNT-UP NUMBER ------------------------------ */
 function Counter({ to, prefix = '', suffix = '', decimals = 0, duration = 1600, className = '' }) {
   const ref = useRef(null);
@@ -197,7 +185,6 @@ function Counter({ to, prefix = '', suffix = '', decimals = 0, duration = 1600, 
     </span>
   );
 }
-
 /* --------------------------- IMAGE WITH FALLBACK -------------------------- */
 function Photo({ src, alt, className = '', imgClass = '', tint = 'from-cyan-500/25 via-indigo-500/10 to-blue-950/25' }) {
   const [failed, setFailed] = useState(false);
@@ -226,7 +213,6 @@ function Photo({ src, alt, className = '', imgClass = '', tint = 'from-cyan-500/
     </div>
   );
 }
-
 /* --------------------------- ANIMATED LIVE CHART -------------------------- */
 function LiveChart({ height = 168 }) {
   const line = 'M0,132 L34,118 L68,126 L102,88 L136,104 L170,62 L204,80 L238,44 L272,58 L306,26 L340,38 L374,14 L408,26';
@@ -255,7 +241,6 @@ function LiveChart({ height = 168 }) {
     </svg>
   );
 }
-
 /* --------------------------- FLOATING FX GLYPHS --------------------------- */
 function FloatingGlyphs() {
   const glyphs = [
@@ -277,7 +262,6 @@ function FloatingGlyphs() {
     </div>
   );
 }
-
 /* --------------------------- AURORA BACKDROP ------------------------------ */
 function Aurora() {
   return (
@@ -289,7 +273,6 @@ function Aurora() {
     </div>
   );
 }
-
 export default function LandingPage() {
   const navigate = useNavigate();
   const [showAuthModal, setShowAuthModal] = useState(false);
@@ -306,7 +289,6 @@ export default function LandingPage() {
   });
   const [errorMsg, setErrorMsg] = useState('');
   const [loading, setLoading] = useState(false);
-
   const handleAuthSubmit = async (e) => {
     e.preventDefault();
     setErrorMsg('');
@@ -361,14 +343,12 @@ export default function LandingPage() {
       setLoading(false);
     }
   };
-
   const openAuth = (mode) => {
     setAuthMode(mode);
     setErrorMsg('');
     setShowAuthModal(true);
     setMobileNav(false);
   };
-
   const navLinks = [
     { href: '#markets', label: 'Markets' },
     { href: '#accounts', label: 'Account tiers' },
@@ -376,12 +356,10 @@ export default function LandingPage() {
     { href: '#security', label: 'Fund security' },
     { href: '#institutional', label: 'Institutional' },
   ];
-
   const tradeBtn =
     'px-4 py-2 bg-cyan-500/10 hover:bg-cyan-600 hover:text-white border border-cyan-500/40 text-cyan-700 rounded-lg font-sans font-extrabold transition duration-200 hover:shadow-lg';
-
   return (
-    <div className="mm-root min-h-screen bg-white text-[#0b1224] flex flex-col justify-between selection:bg-blue-900 selection:text-white relative w-screen overflow-x-hidden m-0 p-0">
+    <div className="mm-root min-h-screen bg-white text-[#0b1224] flex flex-col justify-between selection:bg-blue-900 selection:text-white relative w-full overflow-x-hidden m-0 p-0">
       <MeridianStyles />
       
       {/* ================= LIVE MARKET TICKER ================= */}
@@ -411,7 +389,6 @@ export default function LandingPage() {
           </div>
         </div>
       </div>
-
       {/* ================= NAVIGATION ================= */}
       <header className="sticky top-0 z-40 border-b border-slate-200 bg-white/90 backdrop-blur-2xl w-full">
         <div className="w-full px-6 sm:px-12 py-3.5 flex justify-between items-center gap-4">
@@ -477,7 +454,6 @@ export default function LandingPage() {
           </div>
         )}
       </header>
-
       {/* ================= HERO ================= */}
       <section className="relative overflow-hidden pt-14 sm:pt-20 pb-20 sm:pb-24 w-full bg-white">
         <Aurora />
@@ -621,7 +597,6 @@ export default function LandingPage() {
           </div>
         </div>
       </section>
-
       {/* ================= TRUST STRIP ================= */}
       <section className="relative border-y border-slate-200 bg-white py-6 w-full">
         <div className="mm-fade-x overflow-hidden">
@@ -639,7 +614,6 @@ export default function LandingPage() {
           </div>
         </div>
       </section>
-
       {/* ================= LIVE MARKET RATES ================= */}
       <section id="markets" className="relative py-20 sm:py-24 w-full bg-white overflow-hidden">
         <div className="absolute top-1/4 -left-40 w-[520px] h-[520px] rounded-full bg-cyan-500/5 blur-[150px] pointer-events-none" />
@@ -810,7 +784,6 @@ export default function LandingPage() {
           </Reveal>
         </div>
       </section>
-
       {/* ================= TERMINAL SHOWCASE ================= */}
       <section id="features" className="relative py-20 sm:py-24 overflow-hidden bg-white">
         <div className="absolute top-10 right-0 w-[560px] h-[560px] rounded-full bg-blue-900/5 blur-[160px] pointer-events-none" />
@@ -872,7 +845,6 @@ export default function LandingPage() {
           </div>
         </div>
       </section>
-
       {/* ================= INFRASTRUCTURE CARDS ================= */}
       <section className="relative py-20 sm:py-24 w-full bg-white">
         <div className="w-full px-6 sm:px-12">
@@ -906,7 +878,6 @@ export default function LandingPage() {
           </div>
         </div>
       </section>
-
       {/* ================= ACCOUNT TIERS ================= */}
       <section id="accounts" className="relative py-20 sm:py-24 w-full overflow-hidden bg-white">
         <div className="absolute top-1/3 left-1/2 -translate-x-1/2 w-[720px] h-[520px] rounded-full bg-blue-900/5 blur-[170px] pointer-events-none" />
@@ -1016,7 +987,6 @@ export default function LandingPage() {
           </div>
         </div>
       </section>
-
       {/* ================= FUND SECURITY ================= */}
       <section id="security" className="relative py-20 sm:py-24 overflow-hidden bg-white">
         <div className="absolute bottom-0 left-0 w-[520px] h-[520px] rounded-full bg-emerald-500/5 blur-[160px] pointer-events-none" />
@@ -1069,7 +1039,6 @@ export default function LandingPage() {
           </Reveal>
         </div>
       </section>
-
       {/* ================= TRADERS / SOCIAL PROOF ================= */}
       <section className="relative py-20 sm:py-24 w-full bg-white">
         <div className="w-full px-6 sm:px-12">
@@ -1107,7 +1076,6 @@ export default function LandingPage() {
           </div>
         </div>
       </section>
-
       {/* ================= CLOSING CTA ================= */}
       <section className="relative py-20 sm:py-24 px-6 sm:px-12 bg-white w-full">
         <Reveal className="relative w-full">
@@ -1147,7 +1115,6 @@ export default function LandingPage() {
           </div>
         </Reveal>
       </section>
-
       {/* ================= FOOTER ================= */}
       <footer id="support" className="relative bg-[#060B18] text-slate-400 pt-16 pb-10 text-xs border-t border-white/10 w-full">
         <div className="w-full px-6 sm:px-12 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-10 lg:gap-12 mb-14">
@@ -1203,7 +1170,6 @@ export default function LandingPage() {
           Risk warning: trading forex, CFDs and digital assets involves high risk to your capital. You should only trade money you can afford to lose. © 2026 Meridian Markets Ltd.
         </div>
       </footer>
-
       {/* ================= AUTH MODAL ================= */}
       {showAuthModal && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-md flex items-center justify-center p-4 z-50 overflow-y-auto">
@@ -1338,19 +1304,11 @@ export default function LandingPage() {
                 <button
                   type="submit"
                   disabled={loading}
-                  className="mm-cta w-full py-3.5 disabled:opacity-50 disabled:cursor-not-allowed text-white font-extrabold text-[13px] rounded-xl mt-5 shadow-lg shadow-blue-900/25"
+                  className="mm-cta w-full py-3.5 rounded-xl text-white font-extrabold text-[13px] shadow-lg shadow-blue-900/30 flex items-center justify-center gap-2 mt-6"
                 >
-                  {loading
-                    ? 'Processing...'
-                    : authMode === 'register'
-                      ? 'Register & enter terminal'
-                      : 'Sign in'}
+                  {loading ? 'Processing...' : (authMode === 'register' ? 'Create live account' : 'Sign in')}
                 </button>
               </form>
-              <div className="mt-5 flex items-center justify-center gap-2 text-[11px] text-slate-500">
-                <Lock className="w-3.5 h-3.5 text-emerald-600" />
-                <span>Encrypted in transit · funds held in segregated accounts</span>
-              </div>
             </div>
           </div>
         </div>
