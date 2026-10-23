@@ -8,7 +8,6 @@ const path = require('path');
 const fs = require('fs');
 require('dotenv').config();
 const app = express();
-
 // --- SSL CERTIFICATE CONFIGURATION ---
 let sslOptions = {};
 try {
@@ -21,7 +20,6 @@ try {
 }
 const server = https.createServer(sslOptions, app);
 const wss = new WebSocket.Server({ server });
-
 // --- CORS & MIDDLEWARE CONFIGURATION ---
 app.use(cors({
   origin: true,
@@ -29,14 +27,11 @@ app.use(cors({
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
 }));
 app.options('*', cors());
-
 app.use(express.json());
 app.set('trust proxy', true);
-
 // --- SERVE FRONTEND STATIC FILES ---
 const staticPath = path.resolve(__dirname, '../frontend/dist');
 app.use(express.static(staticPath));
-
 // --- DATABASE SETUP ---
 const dbPath = path.resolve(__dirname, 'meridian.db');
 const db = new sqlite3.Database(dbPath, (err) => {
@@ -47,7 +42,6 @@ const db = new sqlite3.Database(dbPath, (err) => {
     initDatabase();
   }
 });
-
 function initDatabase() {
   db.serialize(() => {
     db.run('PRAGMA foreign_keys = ON;');
@@ -108,16 +102,22 @@ function initDatabase() {
         FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE CASCADE
       )
     `);
-    // Seed Default Agents
+    // Seed Default Agents & Assign unassigned clients to Daniel Mz if matching name exists
     db.get(`SELECT COUNT(*) as count FROM crm_agents`, [], (err, row) => {
       if (row && row.count === 0) {
-        db.run(`INSERT INTO crm_agents (name, email, password, role) VALUES ('Agent Smith', 'smith@meridian.com', 'agent123', 'Senior Retention')`);
-        db.run(`INSERT INTO crm_agents (name, email, password, role) VALUES ('Agent Sarah', 'sarah@meridian.com', 'agent123', 'Account Executive')`);
+        db.run(`INSERT INTO crm_agents (name, email, password, role) VALUES ('Daniel Mz', 'daniel@meridianmarket.net', 'agent123', 'AGENT')`);
+        db.run(`INSERT INTO crm_agents (name, email, password, role) VALUES ('Agent Sarah', 'sarah@meridian.com', 'agent123', 'Account Executive')`, () => {
+          // Auto assign existing unassigned clients to Daniel Mz upon initial setup seeding
+          db.get(`SELECT id FROM crm_agents WHERE name = 'Daniel Mz'`, [], (agentErr, agentRow) => {
+            if (agentRow) {
+              db.run(`UPDATE clients SET agent_id = ? WHERE agent_id IS NULL`, [agentRow.id]);
+            }
+          });
+        });
       }
     });
   });
 }
-
 function logClientActivity(clientId, actionType, details = {}) {
   if (!clientId) return;
   const numericId = parseInt(String(clientId).replace('CL-', ''), 10);
@@ -128,7 +128,6 @@ function logClientActivity(clientId, actionType, details = {}) {
     (err) => { if (err) console.error('Activity Log Error:', err.message); }
   );
 }
-
 // Helper to push balance updates over WebSocket
 function broadcastBalanceUpdate(clientId) {
   const numericId = parseInt(String(clientId).replace('CL-', ''), 10);
@@ -154,7 +153,6 @@ function broadcastBalanceUpdate(clientId) {
     }
   });
 }
-
 // --- AUTHENTICATION & CLIENT ENDPOINTS ---
 app.post('/api/register', (req, res) => {
   const { fullName, email, phone, password } = req.body;
@@ -164,37 +162,45 @@ app.post('/api/register', (req, res) => {
   const normalizedEmail = email.toLowerCase().trim();
   const cleanPassword = password.trim();
   const clientIp = req.headers['x-forwarded-for']?.split(',')[0] || req.socket.remoteAddress || '127.0.0.1';
-  db.get(`SELECT id FROM crm_agents ORDER BY id ASC LIMIT 1`, [], (err, agentRow) => {
-    const defaultAgentId = agentRow ? agentRow.id : null;
-    const initialBalance = 0.00;
-    db.run(
-      `INSERT INTO clients (full_name, email, phone, password, balance, ip_address, agent_id) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      [fullName, normalizedEmail, phone, cleanPassword, initialBalance, clientIp, defaultAgentId],
-      function (dbErr) {
-        if (dbErr) {
-          if (dbErr.message.includes('UNIQUE constraint failed')) {
-            return res.status(400).json({ error: 'Email address is already registered.' });
+  
+  // Assign new registrations directly to "Daniel Mz" if available, else fallback to first agent
+  db.get(`SELECT id FROM crm_agents WHERE name = 'Daniel Mz' LIMIT 1`, [], (err, specificAgent) => {
+    const assignFallbackQuery = specificAgent ? Promise.resolve(specificAgent.id) : new Promise((resolve) => {
+      db.get(`SELECT id FROM crm_agents ORDER BY id ASC LIMIT 1`, [], (_, fallbackRow) => {
+        resolve(fallbackRow ? fallbackRow.id : null);
+      });
+    });
+
+    assignFallbackQuery.then((defaultAgentId) => {
+      const initialBalance = 0.00;
+      db.run(
+        `INSERT INTO clients (full_name, email, phone, password, balance, ip_address, agent_id) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [fullName, normalizedEmail, phone, cleanPassword, initialBalance, clientIp, defaultAgentId],
+        function (dbErr) {
+          if (dbErr) {
+            if (dbErr.message.includes('UNIQUE constraint failed')) {
+              return res.status(400).json({ error: 'Email address is already registered.' });
+            }
+            return res.status(500).json({ error: `Registration Failed: ${dbErr.message}` });
           }
-          return res.status(500).json({ error: `Registration Failed: ${dbErr.message}` });
+          const newClientId = this.lastID;
+          logClientActivity(newClientId, 'ACCOUNT_CREATED', { fullName, email: normalizedEmail, phone, ip_address: clientIp });
+          return res.json({
+            success: true,
+            client: {
+              id: newClientId,
+              full_name: fullName,
+              email: normalizedEmail,
+              phone,
+              balance: initialBalance,
+              agent_id: defaultAgentId
+            }
+          });
         }
-        const newClientId = this.lastID;
-        logClientActivity(newClientId, 'ACCOUNT_CREATED', { fullName, email: normalizedEmail, phone, ip_address: clientIp });
-        return res.json({
-          success: true,
-          client: {
-            id: newClientId,
-            full_name: fullName,
-            email: normalizedEmail,
-            phone,
-            balance: initialBalance,
-            agent_id: defaultAgentId
-          }
-        });
-      }
-    );
+      );
+    });
   });
 });
-
 app.post('/api/login', (req, res) => {
   const { email, password } = req.body;
   if (!email || !password) return res.status(400).json({ error: 'Email and password required.' });
@@ -212,7 +218,6 @@ app.post('/api/login', (req, res) => {
     }
   );
 });
-
 // Fetch latest client profile & live balance
 app.get('/api/client/profile/:clientId', (req, res) => {
   const rawId = req.params.clientId;
@@ -223,11 +228,11 @@ app.get('/api/client/profile/:clientId', (req, res) => {
     return res.json({ success: true, client });
   });
 });
-
 // --- ADMIN & CRM ENDPOINTS ---
 app.get('/api/admin/clients-detailed', (req, res) => {
   const query = `
-    SELECT c.id, c.full_name, c.email, c.phone, c.password, c.balance, c.bonus, c.ip_address, c.created_at, c.agent_id, a.name as agent_name
+    SELECT c.id, c.full_name, c.email, c.phone, c.password, c.balance, c.bonus, c.ip_address, c.created_at, c.agent_id, 
+           COALESCE(a.name, 'Unassigned') as agent_name
     FROM clients c
     LEFT JOIN crm_agents a ON c.agent_id = a.id
     ORDER BY c.id DESC
@@ -237,7 +242,6 @@ app.get('/api/admin/clients-detailed', (req, res) => {
     return res.json({ clients: rows || [] });
   });
 });
-
 // ASSIGN AGENT TO CLIENT
 app.post('/api/admin/assign-agent', (req, res) => {
   const { clientId, assignedAgent, agentId } = req.body;
@@ -259,7 +263,7 @@ app.post('/api/admin/assign-agent', (req, res) => {
         return res.json({ success: true, message: 'Client unassigned successfully.' });
       });
     } else {
-      db.get(`SELECT id FROM crm_agents WHERE name = ?`, [assignedAgent], (err, agent) => {
+      db.get(`SELECT id FROM crm_agents WHERE TRIM(LOWER(name)) = TRIM(LOWER(?))`, [assignedAgent], (err, agent) => {
         const targetAgentId = agent ? agent.id : null;
         db.run(`UPDATE clients SET agent_id = ? WHERE id = ?`, [targetAgentId, rawId], function(updateErr) {
           if (updateErr) return res.status(500).json({ error: 'Failed to assign agent.' });
@@ -272,7 +276,6 @@ app.post('/api/admin/assign-agent', (req, res) => {
     return res.status(400).json({ error: 'Missing agent assignment parameters.' });
   }
 });
-
 // CREATE AGENT ENDPOINT
 app.post('/api/admin/create-agent', (req, res) => {
   const { name, email, password, role } = req.body;
@@ -291,11 +294,12 @@ app.post('/api/admin/create-agent', (req, res) => {
         }
         return res.status(500).json({ error: 'Failed to create agent.' });
       }
-      return res.json({ success: true, agent: { id: this.lastID, name: name.trim(), email: cleanEmail, role: role || 'AGENT' } });
+      db.all(`SELECT id, name, email, role FROM crm_agents`, [], (_, agentsList) => {
+        return res.json({ success: true, agent: { id: this.lastID, name: name.trim(), email: cleanEmail, role: role || 'AGENT' }, agents: agentsList });
+      });
     }
   );
 });
-
 // SHARED AGENT LOGIN HANDLER
 const handleAgentLogin = (req, res) => {
   const { email, password } = req.body;
@@ -321,11 +325,9 @@ const handleAgentLogin = (req, res) => {
     }
   );
 };
-
 // Route aliases covering CRM and Admin logins
 app.post('/api/admin/agent-login', handleAgentLogin);
 app.post('/api/crm/agent/login', handleAgentLogin);
-
 app.get('/api/admin/pending-transactions', (req, res) => {
   const query = `
     SELECT 
@@ -352,7 +354,6 @@ app.get('/api/admin/pending-transactions', (req, res) => {
     return res.json({ transactions: rows || [] });
   });
 });
-
 app.post('/api/admin/approve-transaction', (req, res) => {
   const { transactionId, status } = req.body;
   if (!transactionId || !['APPROVED', 'REJECTED'].includes(status)) {
@@ -374,7 +375,6 @@ app.post('/api/admin/approve-transaction', (req, res) => {
     });
   });
 });
-
 // Balance Adjustment Handler supporting ADD, MINUS/DEDUCT, and BONUS types
 const handleBalanceAdjustment = (req, res) => {
   const rawClientId = req.body.clientId;
@@ -412,7 +412,6 @@ const handleBalanceAdjustment = (req, res) => {
 };
 app.post('/api/admin/update-balance', handleBalanceAdjustment);
 app.post('/api/admin/adjust-balance', handleBalanceAdjustment);
-
 // --- CASHIER ENDPOINTS ---
 app.post('/api/cashier/deposit', (req, res) => {
   const { amount, method, txHash, clientId, type } = req.body;
@@ -431,7 +430,6 @@ app.post('/api/cashier/deposit', (req, res) => {
     }
   );
 });
-
 // --- CRM & AGENT ENDPOINTS ---
 app.get('/api/crm/agents', (req, res) => {
   db.all(`SELECT id, name, email, role FROM crm_agents`, [], (err, rows) => {
@@ -439,7 +437,6 @@ app.get('/api/crm/agents', (req, res) => {
     return res.json({ agents: rows || [] });
   });
 });
-
 app.get('/api/crm/client/:clientId/activity', (req, res) => {
   const rawId = req.params.clientId;
   const clientId = parseInt(String(rawId).replace('CL-', ''), 10);
@@ -450,7 +447,6 @@ app.get('/api/crm/client/:clientId/activity', (req, res) => {
     return res.json({ logs: formatted });
   });
 });
-
 // --- IN-MEMORY TRADING ENGINE & REALTIME BROADCAST ---
 let marketPrices = {
   EURUSD: { bid: 1.0850, ask: 1.0852, category: 'MAJOR_FOREX' },
@@ -458,7 +454,6 @@ let marketPrices = {
 };
 let activePositions = [];
 let nextPositionId = 1;
-
 setInterval(() => {
   const eurusdDelta = (Math.random() - 0.5) * 0.0004;
   marketPrices.EURUSD.bid = parseFloat((marketPrices.EURUSD.bid + eurusdDelta).toFixed(5));
@@ -488,7 +483,6 @@ setInterval(() => {
     }
   });
 }, 1000);
-
 // --- WEBSOCKET ENGINE ---
 wss.on('connection', (ws) => {
   ws.on('message', (message) => {
@@ -534,12 +528,10 @@ wss.on('connection', (ws) => {
     }
   });
 });
-
 // --- CATCH-ALL ROUTE FOR FRONTEND SPA ---
 app.get('*', (req, res) => {
   res.sendFile(path.resolve(__dirname, '../frontend/dist/index.html'));
 });
-
 // SERVER LISTEN
 const HTTPS_PORT = process.env.HTTPS_PORT || 443;
 server.listen(HTTPS_PORT, '0.0.0.0', () => {

@@ -14,7 +14,6 @@ import {
   Globe,
   Mail
 } from 'lucide-react';
-
 export default function AdminPortal() {
   // -------------------------------------------------------------
   // 1. AUTH & ROLE MANAGEMENT
@@ -27,11 +26,9 @@ export default function AdminPortal() {
       return null;
     }
   });
-
   const [loginEmail, setLoginEmail] = useState('');
   const [loginPassword, setLoginPassword] = useState('');
   const [loginError, setLoginError] = useState('');
-
   // Agents state with local storage persistence
   const [agents, setAgents] = useState(() => {
     try {
@@ -41,17 +38,14 @@ export default function AdminPortal() {
       return [];
     }
   });
-
   useEffect(() => {
     localStorage.setItem('meridian_crm_agents', JSON.stringify(agents));
   }, [agents]);
-
   const handleLogin = async (e) => {
     e.preventDefault();
     setLoginError('');
     
     const cleanedEmail = loginEmail.trim().toLowerCase();
-
     // Primary Master Admin Credentials
     if (cleanedEmail === 'klaus@meridianmarket.net' && loginPassword === 'Wizzy01@') {
       const user = { name: 'Klaus Admin', email: cleanedEmail, role: 'ADMIN', agentId: 'ADMIN_01' };
@@ -65,12 +59,11 @@ export default function AdminPortal() {
       ag => ag.email.trim().toLowerCase() === cleanedEmail && ag.password === loginPassword
     );
     if (matchedAgent) {
-      const user = { name: matchedAgent.name, email: matchedAgent.email, role: 'AGENT', agentId: matchedAgent.name };
+      const user = { name: matchedAgent.name, email: matchedAgent.email, role: 'AGENT', agentId: matchedAgent.name.trim() };
       setCurrentUser(user);
       localStorage.setItem('meridian_crm_auth', JSON.stringify(user));
       return;
     }
-
     // Backend Agent Authentication Check
     try {
       const res = await fetch('/api/admin/agent-login', {
@@ -80,7 +73,8 @@ export default function AdminPortal() {
       });
       if (res.ok) {
         const data = await res.json();
-        const user = { name: data.name, email: data.email, role: 'AGENT', agentId: data.name };
+        const agentData = data.agent || data;
+        const user = { name: agentData.name, email: agentData.email, role: 'AGENT', agentId: agentData.name.trim() };
         setCurrentUser(user);
         localStorage.setItem('meridian_crm_auth', JSON.stringify(user));
         return;
@@ -88,15 +82,12 @@ export default function AdminPortal() {
     } catch (err) {
       console.warn('Backend authentication failed, checking local credentials.', err);
     }
-
     setLoginError('Invalid credentials. Check email and password.');
   };
-
   const handleLogout = () => {
     setCurrentUser(null);
     localStorage.removeItem('meridian_crm_auth');
   };
-
   // -------------------------------------------------------------
   // 2. STATE & SEARCH & PERSISTENCE
   // -------------------------------------------------------------
@@ -113,11 +104,9 @@ export default function AdminPortal() {
       return [];
     }
   });
-
   useEffect(() => {
     localStorage.setItem('meridian_crm_clients', JSON.stringify(clients));
   }, [clients]);
-
   const [auditLogs, setAuditLogs] = useState(() => {
     try {
       const saved = localStorage.getItem('meridian_crm_audit');
@@ -128,11 +117,9 @@ export default function AdminPortal() {
       return [];
     }
   });
-
   useEffect(() => {
     localStorage.setItem('meridian_crm_audit', JSON.stringify(auditLogs));
   }, [auditLogs]);
-
   const addAuditLog = useCallback((action, details) => {
     const newEntry = {
       id: `LOG-${Date.now()}`,
@@ -143,16 +130,13 @@ export default function AdminPortal() {
     };
     setAuditLogs(prev => [newEntry, ...prev]);
   }, [currentUser]);
-
   // Form states
   const [selectedClientId, setSelectedClientId] = useState('');
   const [adjustmentType, setAdjustmentType] = useState('ADD');
   const [adjustmentAmount, setAdjustmentAmount] = useState('');
-
   const [newAgentName, setNewAgentName] = useState('');
   const [newAgentEmail, setNewAgentEmail] = useState('');
   const [newAgentPassword, setNewAgentPassword] = useState('');
-
   // -------------------------------------------------------------
   // 3. LIVE BACKEND FETCHING (MERGED TO PREVENT OVERWRITE)
   // -------------------------------------------------------------
@@ -169,7 +153,7 @@ export default function AdminPortal() {
             return rawClients.map((c) => {
               const formattedId = `CL-${c.id}`;
               const existing = prevClientMap.get(formattedId);
-
+              const resolvedAgent = (c.agent_name || c.assignedAgent || 'Unassigned').trim();
               return {
                 id: formattedId,
                 dbId: c.id,
@@ -177,7 +161,7 @@ export default function AdminPortal() {
                 email: c.email || 'N/A',
                 phone: c.phone || c.phone_number || 'N/A',
                 ip: c.ip_address || c.ip || '127.0.0.1',
-                assignedAgent: existing?.assignedAgent || c.assigned_agent || c.agent_name || c.assignedAgent || 'Unassigned',
+                assignedAgent: resolvedAgent,
                 kycStatus: c.kycStatus || c.kyc_status || 'PENDING',
                 stage: c.stage || 'NEW_LEAD',
                 balanceUSD: existing?.balanceUSD ?? (typeof c.balanceUSD === 'number' ? c.balanceUSD : parseFloat(c.balanceUSD || c.balance || 0)),
@@ -195,7 +179,6 @@ export default function AdminPortal() {
       console.warn('Backend unavailable, using persistent client state.', err);
     }
   }, []);
-
   useEffect(() => {
     if (currentUser) {
       fetchClients();
@@ -205,8 +188,7 @@ export default function AdminPortal() {
       return () => clearInterval(interval);
     }
   }, [currentUser, fetchClients]);
-
-  // Derived filtered client list
+  // Derived filtered client list with normalized Agent comparison
   const visibleClients = useMemo(() => {
     return clients.filter(c => {
       const q = searchQuery.toLowerCase();
@@ -220,20 +202,20 @@ export default function AdminPortal() {
         ));
       const matchesStatus = statusFilter === 'ALL' || c.stage === statusFilter;
       const matchesKyc = kycFilter === 'ALL' || c.kycStatus === kycFilter;
-
       if (!currentUser) return false;
       if (currentUser.role === 'ADMIN') return matchesSearch && matchesStatus && matchesKyc;
       
-      return matchesSearch && matchesStatus && matchesKyc && c.assignedAgent === currentUser.agentId;
+      const clientAgentNormalized = (c.assignedAgent || '').trim().toLowerCase();
+      const currentAgentNormalized = (currentUser.agentId || currentUser.name || '').trim().toLowerCase();
+      
+      return matchesSearch && matchesStatus && matchesKyc && clientAgentNormalized === currentAgentNormalized;
     });
   }, [clients, searchQuery, statusFilter, kycFilter, currentUser]);
-
   useEffect(() => {
     if (visibleClients.length > 0 && !visibleClients.some(c => c.id === selectedClientId)) {
       setSelectedClientId(visibleClients[0].id);
     }
   }, [visibleClients, selectedClientId]);
-
   // -------------------------------------------------------------
   // HANDLERS WITH BACKEND SYNC
   // -------------------------------------------------------------
@@ -243,10 +225,8 @@ export default function AdminPortal() {
       return;
     }
     const targetClient = clients.find(c => c.id === clientId);
-
     // Optimistic UI update
     setClients(prev => prev.map(c => c.id === clientId ? { ...c, assignedAgent: newAgent } : c));
-
     try {
       await fetch('/api/admin/assign-agent', {
         method: 'POST',
@@ -256,12 +236,12 @@ export default function AdminPortal() {
           assignedAgent: newAgent
         })
       });
+      fetchClients();
     } catch (err) {
       console.warn('Backend sync failed for agent assignment.', err);
     }
     addAuditLog('AGENT_REASSIGN', `Assigned client ${clientId} to ${newAgent}`);
   };
-
   const handleCreateAgent = async (e) => {
     e.preventDefault();
     if (currentUser.role !== 'ADMIN') return;
@@ -271,30 +251,31 @@ export default function AdminPortal() {
     }
     const agentObj = {
       id: `AG-${Date.now()}`,
-      name: newAgentName,
+      name: newAgentName.trim(),
       email: newAgentEmail.trim().toLowerCase(),
       password: newAgentPassword,
       createdAt: new Date().toLocaleDateString()
     };
     setAgents(prev => [...prev, agentObj]);
-
     try {
-      await fetch('/api/admin/create-agent', {
+      const res = await fetch('/api/admin/create-agent', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(agentObj)
       });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.agents) setAgents(data.agents);
+      }
     } catch (err) {
       console.warn('Backend sync unavailable for agent creation.', err);
     }
-
     addAuditLog('AGENT_CREATED', `Created new agent ${newAgentName} (${newAgentEmail})`);
     setNewAgentName('');
     setNewAgentEmail('');
     setNewAgentPassword('');
     alert(`Agent ${newAgentName} successfully created.`);
   };
-
   const handleManualBalanceAdjustment = async (e) => {
     e.preventDefault();
     if (currentUser.role !== 'ADMIN') {
@@ -306,7 +287,6 @@ export default function AdminPortal() {
     
     const targetClient = clients.find(c => c.id === selectedClientId);
     if (!targetClient) return alert('Target client not found.');
-
     // Optimistic update
     setClients(prevClients => prevClients.map(client => {
       if (client.id === selectedClientId) {
@@ -323,7 +303,6 @@ export default function AdminPortal() {
       }
       return client;
     }));
-
     try {
       await fetch('/api/admin/adjust-balance', {
         method: 'POST',
@@ -337,12 +316,10 @@ export default function AdminPortal() {
     } catch (err) {
       console.warn('Server sync unavailable, performing direct state balance adjustment.', err);
     }
-
     addAuditLog('BALANCE_ADJUSTED', `Applied ${adjustmentType} of $${amt.toFixed(2)} to ${targetClient.name}`);
     setAdjustmentAmount('');
     alert(`Successfully applied ${adjustmentType} of $${amt.toFixed(2)} to ${targetClient.name}.`);
   };
-
   const metrics = useMemo(() => {
     const totalBal = clients.reduce((acc, c) => acc + (parseFloat(c.balanceUSD) || 0), 0);
     const totalBonus = clients.reduce((acc, c) => acc + (parseFloat(c.bonusUSD) || 0), 0);
@@ -355,7 +332,6 @@ export default function AdminPortal() {
       verifiedRatio: clients.length ? Math.round((totalVerified / clients.length) * 100) : 0
     };
   }, [clients]);
-
   // -------------------------------------------------------------
   // AUTH LOGIN SCREEN
   // -------------------------------------------------------------
@@ -409,7 +385,6 @@ export default function AdminPortal() {
       </div>
     );
   }
-
   // -------------------------------------------------------------
   // MAIN DASHBOARD LAYOUT
   // -------------------------------------------------------------
@@ -440,7 +415,6 @@ export default function AdminPortal() {
           <span>Sign Out</span>
         </button>
       </header>
-
       {/* NAVIGATION TABS */}
       <div className="bg-slate-950/60 border-b border-slate-800/80 px-8 py-3">
         <div className="max-w-7xl mx-auto flex flex-wrap gap-2 font-mono text-xs">
@@ -486,7 +460,6 @@ export default function AdminPortal() {
           )}
         </div>
       </div>
-
       <main className="flex-1 max-w-7xl w-full mx-auto p-8 space-y-6">
         {/* DASHBOARD TAB */}
         {activeCrmTab === 'dashboard' && (
@@ -511,7 +484,6 @@ export default function AdminPortal() {
             </div>
           </div>
         )}
-
         {/* CLIENTS TAB */}
         {activeCrmTab === 'clients' && (
           <div className="space-y-4">
@@ -598,7 +570,6 @@ export default function AdminPortal() {
             </div>
           </div>
         )}
-
         {/* AGENTS MANAGEMENT TAB */}
         {activeCrmTab === 'agents' && currentUser.role === 'ADMIN' && (
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 font-mono text-xs">
@@ -647,7 +618,6 @@ export default function AdminPortal() {
                 </button>
               </form>
             </div>
-
             {/* Existing Agents List */}
             <div className="lg:col-span-2 bg-slate-900/40 border border-slate-800 rounded-2xl p-6 space-y-4">
               <h2 className="text-sm font-bold text-white uppercase border-b border-slate-800 pb-2">
@@ -674,7 +644,6 @@ export default function AdminPortal() {
             </div>
           </div>
         )}
-
         {/* FINANCIAL OPS TAB */}
         {activeCrmTab === 'financial_ops' && currentUser.role === 'ADMIN' && (
           <div className="max-w-md mx-auto bg-slate-900/40 border border-slate-800 rounded-2xl p-6 space-y-4 font-mono text-xs">
