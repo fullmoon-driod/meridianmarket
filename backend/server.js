@@ -8,6 +8,7 @@ const path = require('path');
 const fs = require('fs');
 require('dotenv').config();
 const app = express();
+
 // --- SSL CERTIFICATE CONFIGURATION ---
 let sslOptions = {};
 try {
@@ -20,6 +21,7 @@ try {
 }
 const server = https.createServer(sslOptions, app);
 const wss = new WebSocket.Server({ server });
+
 // --- CORS & MIDDLEWARE CONFIGURATION ---
 app.use(cors({
   origin: true,
@@ -29,9 +31,11 @@ app.use(cors({
 app.options('*', cors());
 app.use(express.json());
 app.set('trust proxy', true);
+
 // --- SERVE FRONTEND STATIC FILES ---
 const staticPath = path.resolve(__dirname, '../frontend/dist');
 app.use(express.static(staticPath));
+
 // --- DATABASE SETUP ---
 const dbPath = path.resolve(__dirname, 'meridian.db');
 const db = new sqlite3.Database(dbPath, (err) => {
@@ -42,9 +46,11 @@ const db = new sqlite3.Database(dbPath, (err) => {
     initDatabase();
   }
 });
+
 function initDatabase() {
   db.serialize(() => {
     db.run('PRAGMA foreign_keys = ON;');
+    
     // 1. CRM Agents Table
     db.run(`
       CREATE TABLE IF NOT EXISTS crm_agents (
@@ -56,7 +62,8 @@ function initDatabase() {
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP
       )
     `);
-    // 2. Clients Table (Includes dedicated balance column)
+
+    // 2. Clients Table
     db.run(`
       CREATE TABLE IF NOT EXISTS clients (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -72,25 +79,27 @@ function initDatabase() {
         FOREIGN KEY (agent_id) REFERENCES crm_agents(id) ON DELETE SET NULL
       )
     `);
-    // Ensure backwards compatibility columns exist
+
     db.run(`ALTER TABLE clients ADD COLUMN agent_id INTEGER`, () => {});
     db.run(`ALTER TABLE clients ADD COLUMN ip_address TEXT`, () => {});
     db.run(`ALTER TABLE clients ADD COLUMN balance REAL DEFAULT 0.00`, () => {});
     db.run(`ALTER TABLE clients ADD COLUMN bonus REAL DEFAULT 0.00`, () => {});
-    // 3. Transactions Table (For Deposits, Withdrawals, Admin Credit Adjustments)
+
+    // 3. Transactions Table
     db.run(`
       CREATE TABLE IF NOT EXISTS transactions (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         client_id INTEGER NOT NULL,
-        type TEXT NOT NULL, -- 'DEPOSIT', 'WITHDRAWAL', 'CREDIT', 'DEBIT', 'BONUS'
+        type TEXT NOT NULL,
         amount REAL NOT NULL,
-        status TEXT DEFAULT 'PENDING', -- 'PENDING', 'APPROVED', 'REJECTED'
+        status TEXT DEFAULT 'PENDING',
         method TEXT,
         tx_hash TEXT,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE CASCADE
       )
     `);
+
     // 4. Audit Logs Table
     db.run(`
       CREATE TABLE IF NOT EXISTS client_logs (
@@ -102,22 +111,16 @@ function initDatabase() {
         FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE CASCADE
       )
     `);
-    // Seed Default Agents & Assign unassigned clients to Daniel Mz if matching name exists
-    db.get(`SELECT COUNT(*) as count FROM crm_agents`, [], (err, row) => {
-      if (row && row.count === 0) {
+
+    // Ensure Daniel Mz exists in backend SQLite table
+    db.get(`SELECT id FROM crm_agents WHERE LOWER(name) LIKE '%daniel%'`, [], (err, row) => {
+      if (!row) {
         db.run(`INSERT INTO crm_agents (name, email, password, role) VALUES ('Daniel Mz', 'daniel@meridianmarket.net', 'agent123', 'AGENT')`);
-        db.run(`INSERT INTO crm_agents (name, email, password, role) VALUES ('Agent Sarah', 'sarah@meridian.com', 'agent123', 'Account Executive')`, () => {
-          // Auto assign existing unassigned clients to Daniel Mz upon initial setup seeding
-          db.get(`SELECT id FROM crm_agents WHERE name = 'Daniel Mz'`, [], (agentErr, agentRow) => {
-            if (agentRow) {
-              db.run(`UPDATE clients SET agent_id = ? WHERE agent_id IS NULL`, [agentRow.id]);
-            }
-          });
-        });
       }
     });
   });
 }
+
 function logClientActivity(clientId, actionType, details = {}) {
   if (!clientId) return;
   const numericId = parseInt(String(clientId).replace('CL-', ''), 10);
@@ -128,13 +131,10 @@ function logClientActivity(clientId, actionType, details = {}) {
     (err) => { if (err) console.error('Activity Log Error:', err.message); }
   );
 }
-// Helper to push balance updates over WebSocket
+
 function broadcastBalanceUpdate(clientId) {
   const numericId = parseInt(String(clientId).replace('CL-', ''), 10);
-  if (isNaN(numericId)) {
-    console.error(`Invalid clientId passed to broadcastBalanceUpdate: ${clientId}`);
-    return;
-  }
+  if (isNaN(numericId)) return;
   db.get(`SELECT balance, bonus FROM clients WHERE id = ?`, [numericId], (err, row) => {
     if (!err && row) {
       const payload = JSON.stringify({
@@ -148,11 +148,10 @@ function broadcastBalanceUpdate(clientId) {
           client.send(payload);
         }
       });
-    } else if (err) {
-      console.error('Error broadcasting balance update:', err.message);
     }
   });
 }
+
 // --- AUTHENTICATION & CLIENT ENDPOINTS ---
 app.post('/api/register', (req, res) => {
   const { fullName, email, phone, password } = req.body;
@@ -163,15 +162,14 @@ app.post('/api/register', (req, res) => {
   const cleanPassword = password.trim();
   const clientIp = req.headers['x-forwarded-for']?.split(',')[0] || req.socket.remoteAddress || '127.0.0.1';
   
-  // Assign new registrations directly to "Daniel Mz" if available, else fallback to first agent
-  db.get(`SELECT id FROM crm_agents WHERE name = 'Daniel Mz' LIMIT 1`, [], (err, specificAgent) => {
-    const assignFallbackQuery = specificAgent ? Promise.resolve(specificAgent.id) : new Promise((resolve) => {
-      db.get(`SELECT id FROM crm_agents ORDER BY id ASC LIMIT 1`, [], (_, fallbackRow) => {
-        resolve(fallbackRow ? fallbackRow.id : null);
-      });
-    });
+  db.get(`SELECT id FROM crm_agents WHERE LOWER(name) LIKE '%daniel%' LIMIT 1`, [], (err, specificAgent) => {
+    const getAgentId = specificAgent 
+      ? Promise.resolve(specificAgent.id) 
+      : new Promise((resolve) => {
+          db.get(`SELECT id FROM crm_agents ORDER BY id ASC LIMIT 1`, [], (_, fallback) => resolve(fallback ? fallback.id : null));
+        });
 
-    assignFallbackQuery.then((defaultAgentId) => {
+    getAgentId.then((defaultAgentId) => {
       const initialBalance = 0.00;
       db.run(
         `INSERT INTO clients (full_name, email, phone, password, balance, ip_address, agent_id) VALUES (?, ?, ?, ?, ?, ?, ?)`,
@@ -201,6 +199,7 @@ app.post('/api/register', (req, res) => {
     });
   });
 });
+
 app.post('/api/login', (req, res) => {
   const { email, password } = req.body;
   if (!email || !password) return res.status(400).json({ error: 'Email and password required.' });
@@ -218,7 +217,7 @@ app.post('/api/login', (req, res) => {
     }
   );
 });
-// Fetch latest client profile & live balance
+
 app.get('/api/client/profile/:clientId', (req, res) => {
   const rawId = req.params.clientId;
   const clientId = parseInt(String(rawId).replace('CL-', ''), 10);
@@ -228,6 +227,7 @@ app.get('/api/client/profile/:clientId', (req, res) => {
     return res.json({ success: true, client });
   });
 });
+
 // --- ADMIN & CRM ENDPOINTS ---
 app.get('/api/admin/clients-detailed', (req, res) => {
   const query = `
@@ -242,41 +242,46 @@ app.get('/api/admin/clients-detailed', (req, res) => {
     return res.json({ clients: rows || [] });
   });
 });
-// ASSIGN AGENT TO CLIENT
+
+// FLEXIBLE AGENT ASSIGNMENT ENDPOINT
 app.post('/api/admin/assign-agent', (req, res) => {
   const { clientId, assignedAgent, agentId } = req.body;
   const rawId = parseInt(String(clientId).replace('CL-', ''), 10);
+
   if (isNaN(rawId)) {
     return res.status(400).json({ error: 'Invalid Client ID provided.' });
   }
-  if (agentId) {
-    db.run(`UPDATE clients SET agent_id = ? WHERE id = ?`, [agentId, rawId], function(err) {
-      if (err) return res.status(500).json({ error: 'Failed to assign agent.' });
-      logClientActivity(rawId, 'AGENT_ASSIGNED', { agentId });
+
+  if (assignedAgent === 'Unassigned') {
+    db.run(`UPDATE clients SET agent_id = NULL WHERE id = ?`, [rawId], function(err) {
+      if (err) return res.status(500).json({ error: 'Failed to unassign agent.' });
+      logClientActivity(rawId, 'AGENT_UNASSIGNED', {});
+      return res.json({ success: true, message: 'Client unassigned successfully.' });
+    });
+    return;
+  }
+
+  // Find target agent by ID or flexible Name search
+  const searchQuery = agentId 
+    ? `SELECT id FROM crm_agents WHERE id = ?`
+    : `SELECT id FROM crm_agents WHERE LOWER(TRIM(name)) = LOWER(TRIM(?)) OR LOWER(name) LIKE LOWER(?)`;
+  
+  const searchParams = agentId ? [agentId] : [assignedAgent, `%${assignedAgent}%`];
+
+  db.get(searchQuery, searchParams, (err, agentRow) => {
+    if (err || !agentRow) {
+      console.warn(`Could not match agent '${assignedAgent}' in DB. Setting unassigned.`);
+      return res.status(404).json({ error: 'Agent not found in database.' });
+    }
+
+    db.run(`UPDATE clients SET agent_id = ? WHERE id = ?`, [agentRow.id, rawId], function(updateErr) {
+      if (updateErr) return res.status(500).json({ error: 'Failed to update client agent.' });
+      logClientActivity(rawId, 'AGENT_ASSIGNED', { agentId: agentRow.id, assignedAgent });
       return res.json({ success: true, message: 'Agent assigned successfully.' });
     });
-  } else if (assignedAgent) {
-    if (assignedAgent === 'Unassigned') {
-      db.run(`UPDATE clients SET agent_id = NULL WHERE id = ?`, [rawId], function(err) {
-        if (err) return res.status(500).json({ error: 'Failed to unassign agent.' });
-        logClientActivity(rawId, 'AGENT_UNASSIGNED', {});
-        return res.json({ success: true, message: 'Client unassigned successfully.' });
-      });
-    } else {
-      db.get(`SELECT id FROM crm_agents WHERE TRIM(LOWER(name)) = TRIM(LOWER(?))`, [assignedAgent], (err, agent) => {
-        const targetAgentId = agent ? agent.id : null;
-        db.run(`UPDATE clients SET agent_id = ? WHERE id = ?`, [targetAgentId, rawId], function(updateErr) {
-          if (updateErr) return res.status(500).json({ error: 'Failed to assign agent.' });
-          logClientActivity(rawId, 'AGENT_ASSIGNED', { agentName: assignedAgent, agentId: targetAgentId });
-          return res.json({ success: true, message: 'Agent assigned successfully.' });
-        });
-      });
-    }
-  } else {
-    return res.status(400).json({ error: 'Missing agent assignment parameters.' });
-  }
+  });
 });
-// CREATE AGENT ENDPOINT
+
 app.post('/api/admin/create-agent', (req, res) => {
   const { name, email, password, role } = req.body;
   if (!name || !email || !password) {
@@ -300,7 +305,7 @@ app.post('/api/admin/create-agent', (req, res) => {
     }
   );
 });
-// SHARED AGENT LOGIN HANDLER
+
 const handleAgentLogin = (req, res) => {
   const { email, password } = req.body;
   if (!email || !password) {
@@ -312,48 +317,34 @@ const handleAgentLogin = (req, res) => {
     `SELECT id, name, email, role FROM crm_agents WHERE LOWER(email) = ? AND password = ?`,
     [cleanEmail, cleanPassword],
     (err, agent) => {
-      if (err) {
-        console.error('Agent Login Error:', err.message);
-        return res.status(500).json({ error: 'Database error occurred during login.' });
-      }
-      if (!agent) {
-        console.warn(`Failed agent login attempt for email: ${cleanEmail}`);
-        return res.status(401).json({ error: 'Invalid agent credentials.' });
-      }
-      console.log(`Agent logged in successfully: ${agent.email}`);
+      if (err) return res.status(500).json({ error: 'Database error occurred during login.' });
+      if (!agent) return res.status(401).json({ error: 'Invalid agent credentials.' });
       return res.json({ success: true, agent });
     }
   );
 };
-// Route aliases covering CRM and Admin logins
+
 app.post('/api/admin/agent-login', handleAgentLogin);
 app.post('/api/crm/agent/login', handleAgentLogin);
+
+app.get('/api/crm/agents', (req, res) => {
+  db.all(`SELECT id, name, email, role FROM crm_agents`, [], (err, rows) => {
+    if (err) return res.status(500).json({ error: 'Failed to fetch agents.' });
+    return res.json({ agents: rows || [] });
+  });
+});
+
 app.get('/api/admin/pending-transactions', (req, res) => {
   const query = `
-    SELECT 
-      t.id, 
-      t.client_id, 
-      t.client_id as userId, 
-      t.type, 
-      t.amount, 
-      t.amount as amountUSD, 
-      t.method, 
-      t.tx_hash, 
-      t.status, 
-      t.created_at, 
-      c.full_name, 
-      c.full_name as clientName, 
-      c.email 
-    FROM transactions t
-    JOIN clients c ON t.client_id = c.id
-    WHERE t.status = 'PENDING'
-    ORDER BY t.id DESC
+    SELECT t.id, t.client_id, t.type, t.amount, t.method, t.tx_hash, t.status, t.created_at, c.full_name, c.email 
+    FROM transactions t JOIN clients c ON t.client_id = c.id WHERE t.status = 'PENDING' ORDER BY t.id DESC
   `;
   db.all(query, [], (err, rows) => {
     if (err) return res.status(500).json({ error: 'Failed to fetch pending transactions.' });
     return res.json({ transactions: rows || [] });
   });
 });
+
 app.post('/api/admin/approve-transaction', (req, res) => {
   const { transactionId, status } = req.body;
   if (!transactionId || !['APPROVED', 'REJECTED'].includes(status)) {
@@ -375,7 +366,7 @@ app.post('/api/admin/approve-transaction', (req, res) => {
     });
   });
 });
-// Balance Adjustment Handler supporting ADD, MINUS/DEDUCT, and BONUS types
+
 const handleBalanceAdjustment = (req, res) => {
   const rawClientId = req.body.clientId;
   const clientId = parseInt(String(rawClientId).replace('CL-', ''), 10);
@@ -387,10 +378,7 @@ const handleBalanceAdjustment = (req, res) => {
   if (rawType === 'BONUS') {
     db.run(`UPDATE clients SET bonus = MAX(0, bonus + ?) WHERE id = ?`, [amount, clientId], function (err) {
       if (err) return res.status(500).json({ error: 'Failed to update bonus balance.' });
-      db.run(
-        `INSERT INTO transactions (client_id, type, amount, status, method) VALUES (?, 'BONUS', ?, 'APPROVED', 'ADMIN_BONUS')`,
-        [clientId, amount]
-      );
+      db.run(`INSERT INTO transactions (client_id, type, amount, status, method) VALUES (?, 'BONUS', ?, 'APPROVED', 'ADMIN_BONUS')`, [clientId, amount]);
       logClientActivity(clientId, 'ADMIN_BONUS_ADDED', { amount, type: 'BONUS' });
       broadcastBalanceUpdate(clientId);
       return res.json({ success: true, message: 'Bonus updated successfully.' });
@@ -400,19 +388,17 @@ const handleBalanceAdjustment = (req, res) => {
     const adjustment = isDeduction ? -Math.abs(amount) : Math.abs(amount);
     db.run(`UPDATE clients SET balance = MAX(0, balance + ?) WHERE id = ?`, [adjustment, clientId], function (err) {
       if (err) return res.status(500).json({ error: 'Failed to update balance.' });
-      db.run(
-        `INSERT INTO transactions (client_id, type, amount, status, method) VALUES (?, ?, ?, 'APPROVED', 'ADMIN_ADJUSTMENT')`,
-        [clientId, isDeduction ? 'DEBIT' : 'CREDIT', Math.abs(amount)]
-      );
+      db.run(`INSERT INTO transactions (client_id, type, amount, status, method) VALUES (?, ?, ?, 'APPROVED', 'ADMIN_ADJUSTMENT')`, [clientId, isDeduction ? 'DEBIT' : 'CREDIT', Math.abs(amount)]);
       logClientActivity(clientId, 'ADMIN_BALANCE_ADJUSTMENT', { amount: adjustment, type: rawType });
       broadcastBalanceUpdate(clientId);
       return res.json({ success: true, message: 'Client balance updated successfully.' });
     });
   }
 };
+
 app.post('/api/admin/update-balance', handleBalanceAdjustment);
 app.post('/api/admin/adjust-balance', handleBalanceAdjustment);
-// --- CASHIER ENDPOINTS ---
+
 app.post('/api/cashier/deposit', (req, res) => {
   const { amount, method, txHash, clientId, type } = req.body;
   const rawId = parseInt(String(clientId).replace('CL-', ''), 10);
@@ -430,13 +416,7 @@ app.post('/api/cashier/deposit', (req, res) => {
     }
   );
 });
-// --- CRM & AGENT ENDPOINTS ---
-app.get('/api/crm/agents', (req, res) => {
-  db.all(`SELECT id, name, email, role FROM crm_agents`, [], (err, rows) => {
-    if (err) return res.status(500).json({ error: 'Failed to fetch agents.' });
-    return res.json({ agents: rows || [] });
-  });
-});
+
 app.get('/api/crm/client/:clientId/activity', (req, res) => {
   const rawId = req.params.clientId;
   const clientId = parseInt(String(rawId).replace('CL-', ''), 10);
@@ -447,6 +427,7 @@ app.get('/api/crm/client/:clientId/activity', (req, res) => {
     return res.json({ logs: formatted });
   });
 });
+
 // --- IN-MEMORY TRADING ENGINE & REALTIME BROADCAST ---
 let marketPrices = {
   EURUSD: { bid: 1.0850, ask: 1.0852, category: 'MAJOR_FOREX' },
@@ -454,6 +435,7 @@ let marketPrices = {
 };
 let activePositions = [];
 let nextPositionId = 1;
+
 setInterval(() => {
   const eurusdDelta = (Math.random() - 0.5) * 0.0004;
   marketPrices.EURUSD.bid = parseFloat((marketPrices.EURUSD.bid + eurusdDelta).toFixed(5));
@@ -472,10 +454,7 @@ setInterval(() => {
   });
   const payload = JSON.stringify({
     type: 'MARKET_TICK',
-    data: {
-      prices: marketPrices,
-      positions: activePositions
-    }
+    data: { prices: marketPrices, positions: activePositions }
   });
   wss.clients.forEach((client) => {
     if (client.readyState === WebSocket.OPEN) {
@@ -483,7 +462,7 @@ setInterval(() => {
     }
   });
 }, 1000);
-// --- WEBSOCKET ENGINE ---
+
 wss.on('connection', (ws) => {
   ws.on('message', (message) => {
     try {
@@ -528,11 +507,11 @@ wss.on('connection', (ws) => {
     }
   });
 });
-// --- CATCH-ALL ROUTE FOR FRONTEND SPA ---
+
 app.get('*', (req, res) => {
   res.sendFile(path.resolve(__dirname, '../frontend/dist/index.html'));
 });
-// SERVER LISTEN
+
 const HTTPS_PORT = process.env.HTTPS_PORT || 443;
 server.listen(HTTPS_PORT, '0.0.0.0', () => {
   console.log(`HTTPS Server listening on port ${HTTPS_PORT}`);
