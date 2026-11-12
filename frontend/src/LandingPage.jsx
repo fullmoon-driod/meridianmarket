@@ -44,6 +44,7 @@ const COUNTRY_CODES = [
   { code: '+27', country: 'South Africa' },
   { code: '+65', country: 'Singapore' },
   { code: '+63', country: 'Philippines' },
+  { code: '+60', country: 'Malaysia' },
 ];
 /* ---------------------------------------------------------------------------
    PRESENTATION ASSETS (visual only — swap these URLs for your own art anytime)
