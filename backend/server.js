@@ -8,7 +8,6 @@ const path = require('path');
 const fs = require('fs');
 require('dotenv').config();
 const app = express();
-
 // --- SSL CERTIFICATE CONFIGURATION ---
 let sslOptions = {};
 try {
@@ -21,7 +20,6 @@ try {
 }
 const server = https.createServer(sslOptions, app);
 const wss = new WebSocket.Server({ server });
-
 // --- CORS & MIDDLEWARE CONFIGURATION ---
 app.use(cors({
   origin: true,
@@ -31,11 +29,9 @@ app.use(cors({
 app.options('*', cors());
 app.use(express.json());
 app.set('trust proxy', true);
-
 // --- SERVE FRONTEND STATIC FILES ---
 const staticPath = path.resolve(__dirname, '../frontend/dist');
 app.use(express.static(staticPath));
-
 // --- DATABASE SETUP ---
 const dbPath = path.resolve(__dirname, 'meridian.db');
 const db = new sqlite3.Database(dbPath, (err) => {
@@ -46,11 +42,10 @@ const db = new sqlite3.Database(dbPath, (err) => {
     initDatabase();
   }
 });
-
 function initDatabase() {
   db.serialize(() => {
     db.run('PRAGMA foreign_keys = ON;');
-    
+
     // 1. CRM Agents Table
     db.run(`
       CREATE TABLE IF NOT EXISTS crm_agents (
@@ -62,7 +57,6 @@ function initDatabase() {
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP
       )
     `);
-
     // 2. Clients Table
     db.run(`
       CREATE TABLE IF NOT EXISTS clients (
@@ -79,12 +73,12 @@ function initDatabase() {
         FOREIGN KEY (agent_id) REFERENCES crm_agents(id) ON DELETE SET NULL
       )
     `);
-
     db.run(`ALTER TABLE clients ADD COLUMN agent_id INTEGER`, () => {});
     db.run(`ALTER TABLE clients ADD COLUMN ip_address TEXT`, () => {});
     db.run(`ALTER TABLE clients ADD COLUMN balance REAL DEFAULT 0.00`, () => {});
     db.run(`ALTER TABLE clients ADD COLUMN bonus REAL DEFAULT 0.00`, () => {});
-
+    db.run(`ALTER TABLE clients ADD COLUMN kyc_status TEXT DEFAULT 'PENDING'`, () => {});
+    db.run(`ALTER TABLE clients ADD COLUMN kyc_updated_at DATETIME`, () => {});
     // 3. Transactions Table
     db.run(`
       CREATE TABLE IF NOT EXISTS transactions (
@@ -99,7 +93,6 @@ function initDatabase() {
         FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE CASCADE
       )
     `);
-
     // 4. Audit Logs Table
     db.run(`
       CREATE TABLE IF NOT EXISTS client_logs (
@@ -111,7 +104,6 @@ function initDatabase() {
         FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE CASCADE
       )
     `);
-
     // Ensure Daniel Mz exists in backend SQLite table
     db.get(`SELECT id FROM crm_agents WHERE LOWER(name) LIKE '%daniel%'`, [], (err, row) => {
       if (!row) {
@@ -120,7 +112,6 @@ function initDatabase() {
     });
   });
 }
-
 function logClientActivity(clientId, actionType, details = {}) {
   if (!clientId) return;
   const numericId = parseInt(String(clientId).replace('CL-', ''), 10);
@@ -131,7 +122,6 @@ function logClientActivity(clientId, actionType, details = {}) {
     (err) => { if (err) console.error('Activity Log Error:', err.message); }
   );
 }
-
 function broadcastBalanceUpdate(clientId) {
   const numericId = parseInt(String(clientId).replace('CL-', ''), 10);
   if (isNaN(numericId)) return;
@@ -151,7 +141,6 @@ function broadcastBalanceUpdate(clientId) {
     }
   });
 }
-
 // --- AUTHENTICATION & CLIENT ENDPOINTS ---
 app.post('/api/register', (req, res) => {
   const { fullName, email, phone, password } = req.body;
@@ -161,14 +150,13 @@ app.post('/api/register', (req, res) => {
   const normalizedEmail = email.toLowerCase().trim();
   const cleanPassword = password.trim();
   const clientIp = req.headers['x-forwarded-for']?.split(',')[0] || req.socket.remoteAddress || '127.0.0.1';
-  
+
   db.get(`SELECT id FROM crm_agents WHERE LOWER(name) LIKE '%daniel%' LIMIT 1`, [], (err, specificAgent) => {
-    const getAgentId = specificAgent 
-      ? Promise.resolve(specificAgent.id) 
+    const getAgentId = specificAgent
+      ? Promise.resolve(specificAgent.id)
       : new Promise((resolve) => {
           db.get(`SELECT id FROM crm_agents ORDER BY id ASC LIMIT 1`, [], (_, fallback) => resolve(fallback ? fallback.id : null));
         });
-
     getAgentId.then((defaultAgentId) => {
       const initialBalance = 0.00;
       db.run(
@@ -199,14 +187,13 @@ app.post('/api/register', (req, res) => {
     });
   });
 });
-
 app.post('/api/login', (req, res) => {
   const { email, password } = req.body;
   if (!email || !password) return res.status(400).json({ error: 'Email and password required.' });
   const cleanEmail = email.toLowerCase().trim();
   const cleanPassword = password.trim();
   db.get(
-    `SELECT id, full_name, email, phone, balance, bonus, agent_id FROM clients WHERE LOWER(email) = ? AND password = ?`,
+    `SELECT id, full_name, email, phone, balance, bonus, agent_id, kyc_status FROM clients WHERE LOWER(email) = ? AND password = ?`,
     [cleanEmail, cleanPassword],
     (err, client) => {
       if (err || !client) {
@@ -217,21 +204,19 @@ app.post('/api/login', (req, res) => {
     }
   );
 });
-
 app.get('/api/client/profile/:clientId', (req, res) => {
   const rawId = req.params.clientId;
   const clientId = parseInt(String(rawId).replace('CL-', ''), 10);
   if (isNaN(clientId)) return res.status(400).json({ error: 'Invalid client ID.' });
-  db.get(`SELECT id, full_name, email, phone, balance, bonus, agent_id FROM clients WHERE id = ?`, [clientId], (err, client) => {
+  db.get(`SELECT id, full_name, email, phone, balance, bonus, agent_id, kyc_status FROM clients WHERE id = ?`, [clientId], (err, client) => {
     if (err || !client) return res.status(404).json({ error: 'Client not found.' });
     return res.json({ success: true, client });
   });
 });
-
 // --- ADMIN & CRM ENDPOINTS ---
 app.get('/api/admin/clients-detailed', (req, res) => {
   const query = `
-    SELECT c.id, c.full_name, c.email, c.phone, c.password, c.balance, c.bonus, c.ip_address, c.created_at, c.agent_id, 
+    SELECT c.id, c.full_name, c.email, c.phone, c.password, c.balance, c.bonus, c.ip_address, c.created_at, c.agent_id, c.kyc_status,
            COALESCE(a.name, 'Unassigned') as agent_name
     FROM clients c
     LEFT JOIN crm_agents a ON c.agent_id = a.id
@@ -242,16 +227,13 @@ app.get('/api/admin/clients-detailed', (req, res) => {
     return res.json({ clients: rows || [] });
   });
 });
-
 // FLEXIBLE AGENT ASSIGNMENT ENDPOINT
 app.post('/api/admin/assign-agent', (req, res) => {
   const { clientId, assignedAgent, agentId } = req.body;
   const rawId = parseInt(String(clientId).replace('CL-', ''), 10);
-
   if (isNaN(rawId)) {
     return res.status(400).json({ error: 'Invalid Client ID provided.' });
   }
-
   if (assignedAgent === 'Unassigned') {
     db.run(`UPDATE clients SET agent_id = NULL WHERE id = ?`, [rawId], function(err) {
       if (err) return res.status(500).json({ error: 'Failed to unassign agent.' });
@@ -260,20 +242,17 @@ app.post('/api/admin/assign-agent', (req, res) => {
     });
     return;
   }
-
   // Find target agent by ID or flexible Name search
-  const searchQuery = agentId 
+  const searchQuery = agentId
     ? `SELECT id FROM crm_agents WHERE id = ?`
     : `SELECT id FROM crm_agents WHERE LOWER(TRIM(name)) = LOWER(TRIM(?)) OR LOWER(name) LIKE LOWER(?)`;
-  
-  const searchParams = agentId ? [agentId] : [assignedAgent, `%${assignedAgent}%`];
 
+  const searchParams = agentId ? [agentId] : [assignedAgent, `%${assignedAgent}%`];
   db.get(searchQuery, searchParams, (err, agentRow) => {
     if (err || !agentRow) {
       console.warn(`Could not match agent '${assignedAgent}' in DB. Setting unassigned.`);
       return res.status(404).json({ error: 'Agent not found in database.' });
     }
-
     db.run(`UPDATE clients SET agent_id = ? WHERE id = ?`, [agentRow.id, rawId], function(updateErr) {
       if (updateErr) return res.status(500).json({ error: 'Failed to update client agent.' });
       logClientActivity(rawId, 'AGENT_ASSIGNED', { agentId: agentRow.id, assignedAgent });
@@ -281,7 +260,6 @@ app.post('/api/admin/assign-agent', (req, res) => {
     });
   });
 });
-
 app.post('/api/admin/create-agent', (req, res) => {
   const { name, email, password, role } = req.body;
   if (!name || !email || !password) {
@@ -305,7 +283,6 @@ app.post('/api/admin/create-agent', (req, res) => {
     }
   );
 });
-
 const handleAgentLogin = (req, res) => {
   const { email, password } = req.body;
   if (!email || !password) {
@@ -323,20 +300,17 @@ const handleAgentLogin = (req, res) => {
     }
   );
 };
-
 app.post('/api/admin/agent-login', handleAgentLogin);
 app.post('/api/crm/agent/login', handleAgentLogin);
-
 app.get('/api/crm/agents', (req, res) => {
   db.all(`SELECT id, name, email, role FROM crm_agents`, [], (err, rows) => {
     if (err) return res.status(500).json({ error: 'Failed to fetch agents.' });
     return res.json({ agents: rows || [] });
   });
 });
-
 app.get('/api/admin/pending-transactions', (req, res) => {
   const query = `
-    SELECT t.id, t.client_id, t.type, t.amount, t.method, t.tx_hash, t.status, t.created_at, c.full_name, c.email 
+    SELECT t.id, t.client_id, t.type, t.amount, t.method, t.tx_hash, t.status, t.created_at, c.full_name, c.email
     FROM transactions t JOIN clients c ON t.client_id = c.id WHERE t.status = 'PENDING' ORDER BY t.id DESC
   `;
   db.all(query, [], (err, rows) => {
@@ -344,7 +318,6 @@ app.get('/api/admin/pending-transactions', (req, res) => {
     return res.json({ transactions: rows || [] });
   });
 });
-
 app.post('/api/admin/approve-transaction', (req, res) => {
   const { transactionId, status } = req.body;
   if (!transactionId || !['APPROVED', 'REJECTED'].includes(status)) {
@@ -366,7 +339,6 @@ app.post('/api/admin/approve-transaction', (req, res) => {
     });
   });
 });
-
 const handleBalanceAdjustment = (req, res) => {
   const rawClientId = req.body.clientId;
   const clientId = parseInt(String(rawClientId).replace('CL-', ''), 10);
@@ -395,10 +367,8 @@ const handleBalanceAdjustment = (req, res) => {
     });
   }
 };
-
 app.post('/api/admin/update-balance', handleBalanceAdjustment);
 app.post('/api/admin/adjust-balance', handleBalanceAdjustment);
-
 app.post('/api/cashier/deposit', (req, res) => {
   const { amount, method, txHash, clientId, type } = req.body;
   const rawId = parseInt(String(clientId).replace('CL-', ''), 10);
@@ -416,6 +386,67 @@ app.post('/api/cashier/deposit', (req, res) => {
     }
   );
 });
+// --- KYC APPROVAL ENDPOINT ---
+const normalizeKycStatus = (body) => {
+  const raw = body.kycStatus ?? body.kyc_status ?? body.status ?? body.decision ?? body.action ?? body.approved;
+  if (raw === true) return 'APPROVED';
+  if (raw === false) return 'REJECTED';
+  const v = String(raw === undefined || raw === null ? '' : raw).trim().toUpperCase();
+  if (['APPROVED', 'APPROVE', 'VERIFIED', 'VERIFY', 'ACCEPTED', 'ACCEPT', 'TRUE'].includes(v)) return 'APPROVED';
+  if (['REJECTED', 'REJECT', 'DECLINED', 'DECLINE', 'DENIED', 'DENY', 'FALSE'].includes(v)) return 'REJECTED';
+  if (['PENDING', 'RESET', 'UNVERIFIED'].includes(v)) return 'PENDING';
+  return null;
+};
+
+const handleKycUpdate = (req, res) => {
+  const body = req.body || {};
+  const rawClientId = body.clientId ?? body.client_id ?? body.id ?? body.userId ?? req.params.clientId;
+  const clientId = parseInt(String(rawClientId).replace('CL-', ''), 10);
+  const kycStatus = normalizeKycStatus(body);
+
+  if (isNaN(clientId)) return res.status(400).json({ success: false, error: 'Invalid client ID.' });
+  if (!kycStatus) return res.status(400).json({ success: false, error: 'Invalid KYC status. Use APPROVED, REJECTED or PENDING.' });
+
+  db.run(
+    `UPDATE clients SET kyc_status = ?, kyc_updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+    [kycStatus, clientId],
+    function (err) {
+      if (err) {
+        console.error('KYC Update Error:', err.message);
+        return res.status(500).json({ success: false, error: 'Failed to update KYC status.' });
+      }
+      if (this.changes === 0) return res.status(404).json({ success: false, error: 'Client not found.' });
+
+      logClientActivity(clientId, `KYC_${kycStatus}`, { kycStatus, note: body.note || body.reason || null });
+
+      return res.status(200).json({
+        success: true,
+        confirmed: true,
+        clientId,
+        kyc_status: kycStatus,
+        kycStatus,
+        status: kycStatus,
+        message: `KYC ${kycStatus.toLowerCase()} successfully.`
+      });
+    }
+  );
+};
+
+['/api/admin/kyc-status', '/api/admin/update-kyc', '/api/admin/approve-kyc', '/api/admin/kyc',
+ '/api/crm/kyc-status', '/api/crm/kyc', '/api/crm/client/:clientId/kyc', '/api/client/kyc'].forEach((route) => {
+  app.post(route, handleKycUpdate);
+  app.put(route, handleKycUpdate);
+  app.patch(route, handleKycUpdate);
+});
+
+app.get('/api/crm/client/:clientId/kyc', (req, res) => {
+  const clientId = parseInt(String(req.params.clientId).replace('CL-', ''), 10);
+  if (isNaN(clientId)) return res.status(400).json({ error: 'Invalid client ID.' });
+  db.get(`SELECT id, kyc_status, kyc_updated_at FROM clients WHERE id = ?`, [clientId], (err, row) => {
+    if (err || !row) return res.status(404).json({ error: 'Client not found.' });
+    return res.json({ success: true, clientId: row.id, kyc_status: row.kyc_status || 'PENDING', kyc_updated_at: row.kyc_updated_at });
+  });
+});
 
 app.get('/api/crm/client/:clientId/activity', (req, res) => {
   const rawId = req.params.clientId;
@@ -427,7 +458,6 @@ app.get('/api/crm/client/:clientId/activity', (req, res) => {
     return res.json({ logs: formatted });
   });
 });
-
 // --- IN-MEMORY TRADING ENGINE & REALTIME BROADCAST ---
 let marketPrices = {
   EURUSD: { bid: 1.0850, ask: 1.0852, category: 'MAJOR_FOREX' },
@@ -435,7 +465,6 @@ let marketPrices = {
 };
 let activePositions = [];
 let nextPositionId = 1;
-
 setInterval(() => {
   const eurusdDelta = (Math.random() - 0.5) * 0.0004;
   marketPrices.EURUSD.bid = parseFloat((marketPrices.EURUSD.bid + eurusdDelta).toFixed(5));
@@ -462,7 +491,6 @@ setInterval(() => {
     }
   });
 }, 1000);
-
 wss.on('connection', (ws) => {
   ws.on('message', (message) => {
     try {
@@ -497,7 +525,7 @@ wss.on('connection', (ws) => {
           db.run(`UPDATE clients SET balance = MAX(0, balance + ?) WHERE id = ?`, [closedPos.pnl, rawId], (err) => {
             if (!err) broadcastBalanceUpdate(rawId);
           });
-          
+
           activePositions.splice(posIndex, 1);
           logClientActivity(rawId, 'CLOSE_POSITION', { positionId: id, realizedPnL: closedPos.pnl });
         }
@@ -507,11 +535,9 @@ wss.on('connection', (ws) => {
     }
   });
 });
-
 app.get('*', (req, res) => {
   res.sendFile(path.resolve(__dirname, '../frontend/dist/index.html'));
 });
-
 const HTTPS_PORT = process.env.HTTPS_PORT || 443;
 server.listen(HTTPS_PORT, '0.0.0.0', () => {
   console.log(`HTTPS Server listening on port ${HTTPS_PORT}`);
