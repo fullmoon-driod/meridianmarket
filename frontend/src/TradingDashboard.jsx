@@ -516,6 +516,28 @@ export default function TradingDashboard() {
     idNumber: '',
     documentType: 'Passport'
   });
+  const kycFileInputRef = useRef(null);
+  const [kycFile, setKycFile] = useState(null);
+  const [kycFileError, setKycFileError] = useState('');
+
+  const handleKycFile = (file) => {
+    if (!file) return;
+    const typeOk = ['image/png', 'image/jpeg', 'application/pdf'].includes(file.type)
+      || (!file.type && /\.(png|jpe?g|pdf)$/i.test(file.name));
+    if (!typeOk) {
+      setKycFile(null);
+      setKycFileError('Unsupported file type. Please upload a PNG, JPG or PDF.');
+      return;
+    }
+    if (file.size > 10 * 1024 * 1024) {
+      setKycFile(null);
+      setKycFileError('File is too large. Maximum size is 10MB.');
+      return;
+    }
+    setKycFileError('');
+    setKycFile(file);
+  };
+
   const [currentUser, setCurrentUser] = useState(null);
 
   // Financial Balances (Persisted & Synced with Account Context)
@@ -1600,11 +1622,31 @@ export default function TradingDashboard() {
                     className={`${FIELD} td-num`}
                   />
                 </div>
-
-                <div className="border-2 border-dashed border-blue-200 hover:border-blue-500 rounded-xl p-8 text-center cursor-pointer transition bg-blue-50/50">
+                <div
+                  onClick={() => kycFileInputRef.current && kycFileInputRef.current.click()}
+                  onDragOver={(e) => e.preventDefault()}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    handleKycFile(e.dataTransfer.files && e.dataTransfer.files[0]);
+                  }}
+                  className="border-2 border-dashed border-blue-200 hover:border-blue-500 rounded-xl p-8 text-center cursor-pointer transition bg-blue-50/50"
+                >
+                  <input
+                    ref={kycFileInputRef}
+                    type="file"
+                    accept=".png,.jpg,.jpeg,.pdf,image/png,image/jpeg,application/pdf"
+                    className="hidden"
+                    onClick={(e) => e.stopPropagation()}
+                    onChange={(e) => {
+                      handleKycFile(e.target.files && e.target.files[0]);
+                      e.target.value = '';
+                    }}
+                  />
                   <Upload className="w-8 h-8 text-blue-600 mx-auto mb-2" />
                   <div className="text-sm font-bold text-slate-900">Click or drag front image of ID document</div>
-                  <div className="text-xs text-slate-500 mt-1">PNG, JPG or PDF (Max 10MB)</div>
+                  <div className={`text-xs mt-1 ${kycFileError ? 'text-red-600' : 'text-slate-500'}`}>
+                    {kycFileError || (kycFile ? kycFile.name : 'PNG, JPG or PDF (Max 10MB)')}
+                  </div>
                 </div>
 
                 <button type="submit" className={`${BTN_PRIMARY} w-full py-3.5 text-sm`}>
