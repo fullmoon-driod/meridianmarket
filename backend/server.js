@@ -507,7 +507,11 @@ app.get('/api/crm/client/:clientId/activity', (req, res) => {
 //   ALPACA_DATA_URL                     default https://data.alpaca.markets
 //   QUOTE_BROADCAST_MS                  push interval to browsers (default 500)
 //   STOCK_POLL_MS                       stock polling interval (default 2000)
-//   OANDA_STALE_MS / BINANCE_STALE_MS / ALPACA_STALE_MS   staleness limits
+//   TWELVEDATA_API_KEY                  alternative to OANDA/Alpaca (works from any country);
+//                                       streams Forex, Metals and Stocks. Optional extras:
+//                                       TWELVEDATA_SYMBOL_MAP (JSON, for commodities/indices),
+//                                       TWELVEDATA_SPREAD_BPS (spread used when no bid/ask is sent)
+//   OANDA_STALE_MS / BINANCE_STALE_MS / ALPACA_STALE_MS / TWELVEDATA_STALE_MS   staleness limits
 // ============================================================================
 const QUOTE_CONFIG = {
   broadcastMs: Math.max(100, parseInt(process.env.QUOTE_BROADCAST_MS, 10) || 500),
@@ -516,6 +520,7 @@ const QUOTE_CONFIG = {
     oanda: parseInt(process.env.OANDA_STALE_MS, 10) || 60000,
     binance: parseInt(process.env.BINANCE_STALE_MS, 10) || 30000,
     alpaca: parseInt(process.env.ALPACA_STALE_MS, 10) || 300000,
+    twelvedata: parseInt(process.env.TWELVEDATA_STALE_MS, 10) || 120000,
   },
 };
 
@@ -672,27 +677,53 @@ addInstruments(
   ),
 );
 
-const symbolsBySource = { oanda: {}, binance: {}, alpaca: {} };
+// ---- Provider selection ---------------------------------------------------------
+// OANDA (Forex/Metals/Commodities/Indices) and Alpaca (Stocks) are used when their keys
+// are set. Otherwise, if TWELVEDATA_API_KEY is set, Twelve Data streams those instruments
+// instead (useful where OANDA/Alpaca accounts are unavailable). Forex, metals and stocks use
+// the same symbol as the dashboard; commodities and indices need an explicit mapping, e.g.
+//   TWELVEDATA_SYMBOL_MAP={"USOIL":"WTI/USD","SPX500":"SPX"}
+// Anything without a mapping simply has no quote (and cannot be traded).
+const HAS_OANDA = !!(process.env.OANDA_API_TOKEN && process.env.OANDA_ACCOUNT_ID);
+const HAS_ALPACA = !!(process.env.ALPACA_KEY_ID && process.env.ALPACA_SECRET_KEY);
+let twelveSymbolMap = {};
+try {
+  twelveSymbolMap = JSON.parse(process.env.TWELVEDATA_SYMBOL_MAP || '{}');
+} catch (e) {
+  console.warn('[feed:twelvedata] TWELVEDATA_SYMBOL_MAP is not valid JSON; ignoring it.');
+}
+if (process.env.TWELVEDATA_API_KEY) {
+  Object.entries(INSTRUMENTS).forEach(([symbol, cfg]) => {
+    if (cfg.category === 'Crypto') return;
+    const servedNatively = (cfg.provider === 'oanda' && HAS_OANDA) || (cfg.provider === 'alpaca' && HAS_ALPACA);
+    if (servedNatively) return;
+    const tdSymbol = twelveSymbolMap[symbol] || (['Forex', 'Metals', 'Stocks'].includes(cfg.category) ? symbol : null);
+    cfg.provider = tdSymbol ? 'twelvedata' : null;
+    cfg.providerSymbol = tdSymbol;
+  });
+}
+
+const symbolsBySource = { oanda: {}, binance: {}, alpaca: {}, twelvedata: {} };
 Object.entries(INSTRUMENTS).forEach(([symbol, cfg]) => {
   if (cfg.provider) symbolsBySource[cfg.provider][cfg.providerSymbol] = symbol;
 });
 
-const feedStatus = { oanda: 'disabled', binance: 'disabled', alpaca: 'disabled' };
+const feedStatus = { oanda: 'disabled', binance: 'disabled', alpaca: 'disabled', twelvedata: 'disabled' };
 
 // ---- Quote store ------------------------------------------------------------
 const quotes = new Map(); // symbol -> { bid, ask, ts, tradeable, stale, open, dayKey }
 const dirtySymbols = new Set();
 
-function applyQuote(symbol, bid, ask, { ts = Date.now(), tradeable = true } = {}) {
+function applyQuote(symbol, bid, ask, { ts = Date.now(), tradeable = true, est = false } = {}) {
   if (!INSTRUMENTS[symbol]) return;
   if (!Number.isFinite(bid) || !Number.isFinite(ask) || bid <= 0 || ask <= 0 || ask < bid) return; // drop bad / crossed quotes
   const mid = (bid + ask) / 2;
   const dayKey = new Date().toISOString().slice(0, 10);
   const prev = quotes.get(symbol);
   const open = prev && prev.dayKey === dayKey ? prev.open : mid; // reference price for the day's % change (00:00 UTC, or first quote seen)
-  if (prev && prev.bid === bid && prev.ask === ask && prev.tradeable === tradeable && prev.ts === ts) return;
+  if (prev && prev.bid === bid && prev.ask === ask && prev.tradeable === tradeable && prev.ts === ts && prev.est === est) return;
   const stale = Date.now() - ts > staleLimitFor(symbol); // a replayed old quote must never look fresh
-  quotes.set(symbol, { bid, ask, ts, tradeable, stale, open, dayKey });
+  quotes.set(symbol, { bid, ask, ts, tradeable, stale, open, dayKey, est });
   dirtySymbols.add(symbol);
 }
 
@@ -716,6 +747,7 @@ const serializeQuote = (symbol, q) => ({
   open: q.open,
   tradeable: q.tradeable,
   stale: q.stale,
+  est: !!q.est, // true when the spread is estimated from a last-price feed
   category: INSTRUMENTS[symbol].category,
 });
 
@@ -939,9 +971,100 @@ function startAlpacaFeed() {
   setInterval(poll, QUOTE_CONFIG.stockPollMs);
 }
 
+// ---- Provider: Twelve Data WebSocket (alternative for Forex/Metals/Stocks/...) ----
+// Twelve Data streams a last price and only includes bid/ask for some instruments. When
+// a message has no bid/ask, a spread is applied around the price (basis points, see
+// TWELVEDATA_SPREAD_BPS) and the quote is flagged `est` so the UI labels the spread "est.".
+// A paid Twelve Data plan is required to stream more than a handful of symbols.
+function startTwelveDataFeed() {
+  const key = process.env.TWELVEDATA_API_KEY;
+  const bySymbol = symbolsBySource.twelvedata;
+  const symbols = Object.keys(bySymbol);
+  if (!key) return;
+  if (symbols.length === 0) {
+    console.warn('[feed:twelvedata] no instruments mapped to Twelve Data.');
+    return;
+  }
+  const override = parseFloat(process.env.TWELVEDATA_SPREAD_BPS);
+  const defaultBps = { Forex: 1.5, Metals: 3, Commodities: 5, Indices: 2, Stocks: 2 };
+  const bpsFor = (symbol) => (Number.isFinite(override) ? override : defaultBps[INSTRUMENTS[symbol].category] || 3);
+  const url = process.env.TWELVEDATA_WS_URL || 'wss://ws.twelvedata.com/v1/quotes/price';
+  let attempt = 0;
+
+  const connect = () => {
+    feedStatus.twelvedata = 'connecting';
+    let finished = false;
+    let lastData = Date.now();
+    let heartbeat = null;
+    const ws = new WebSocket(`${url}?apikey=${encodeURIComponent(key)}`);
+    const watchdog = setInterval(() => {
+      if (Date.now() - lastData > 30000) {
+        try {
+          ws.terminate();
+        } catch (e) {
+          /* noop */
+        }
+      }
+    }, 10000);
+
+    const finish = (reason) => {
+      if (finished) return;
+      finished = true;
+      clearInterval(watchdog);
+      clearInterval(heartbeat);
+      feedStatus.twelvedata = 'reconnecting';
+      const delay = Math.min(1000 * 2 ** attempt, 30000);
+      attempt += 1;
+      console.warn(`[feed:twelvedata] ${reason}; reconnecting in ${delay / 1000}s`);
+      setTimeout(connect, delay);
+    };
+
+    ws.on('open', () => {
+      feedStatus.twelvedata = 'connected';
+      attempt = 0;
+      ws.send(JSON.stringify({ action: 'subscribe', params: { symbols: symbols.join(',') } }));
+      heartbeat = setInterval(() => ws.readyState === WebSocket.OPEN && ws.send(JSON.stringify({ action: 'heartbeat' })), 10000);
+      console.log(`[feed:twelvedata] subscribed to ${symbols.length} instruments`);
+    });
+    ws.on('message', (raw) => {
+      lastData = Date.now();
+      let m;
+      try {
+        m = JSON.parse(raw);
+      } catch (e) {
+        return;
+      }
+      if (m.event === 'subscribe-status') {
+        const fails = (m.fails || []).map((f) => f.symbol || f).join(',');
+        if (fails) console.warn(`[feed:twelvedata] could not subscribe to: ${fails.slice(0, 300)} (plan limit or unknown symbol)`);
+        return;
+      }
+      if (m.event !== 'price') return;
+      const symbol = bySymbol[m.symbol];
+      if (!symbol) return;
+      let bid = parseFloat(m.bid);
+      let ask = parseFloat(m.ask);
+      let est = false;
+      if (!(Number.isFinite(bid) && Number.isFinite(ask) && bid > 0 && ask >= bid)) {
+        const price = parseFloat(m.price);
+        if (!Number.isFinite(price) || price <= 0) return;
+        const half = (price * bpsFor(symbol)) / 20000;
+        bid = price - half;
+        ask = price + half;
+        est = true;
+      }
+      applyQuote(symbol, bid, ask, { est });
+    });
+    ws.on('close', () => finish('connection closed'));
+    ws.on('error', (e) => finish(`error: ${e.message}`));
+  };
+  connect();
+}
+
 startOandaFeed();
 startBinanceFeed();
 startAlpacaFeed();
+startTwelveDataFeed();
 
 // ---- Trading engine (marks positions to the live bid/ask) -------------------
 let activePositions = [];

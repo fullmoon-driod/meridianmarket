@@ -578,9 +578,9 @@ const formatSpread = (asset, q) => {
   const diff = q.ask - q.bid;
   if (asset.category === 'Forex') {
     const pip = asset.digits >= 4 ? 0.0001 : 0.01; // JPY-style pairs: 0.01
-    return `${(diff / pip).toFixed(1)} pips`;
+    return `${(diff / pip).toFixed(1)} pips${q.est ? ' (est.)' : ''}`;
   }
-  return diff.toFixed(asset.digits);
+  return `${diff.toFixed(asset.digits)}${q.est ? ' (est.)' : ''}`;
 };
 
 // P&L is computed in the pair's quote currency; convert it to USD with live rates.
@@ -1031,6 +1031,16 @@ export default function TradingDashboard() {
     connecting: { dot: 'bg-amber-500', label: 'Connecting to feed…' },
     offline: { dot: 'bg-rose-500', label: 'Feed offline' },
   }[feed.status] || { dot: 'bg-amber-500', label: 'Connecting to feed…' };
+  // Connected to the server but no quotes flowing: say why instead of claiming "live".
+  let feedHint = '';
+  if ((feed.status === 'live' || feed.status === 'polling') && liveQuoteCount === 0) {
+    feedUi.dot = 'bg-rose-500';
+    feedUi.label = 'Connected, but no quotes received';
+    const f = feed.feeds;
+    feedHint = f
+      ? `Provider status: OANDA ${f.oanda}, Binance ${f.binance}, Alpaca ${f.alpaca}. Check the API keys in the server .env and the server log.`
+      : 'The server is not sending live quotes. Make sure the updated server.js is the one running (restart it).';
+  }
   const kycBadge =
     kycState.status === 'pending' ? 'bg-amber-50 text-amber-700 border-amber-200' : 'bg-slate-100 text-slate-600 border-slate-200';
   /* ---------- Reusable blocks ---------- */
@@ -1239,6 +1249,12 @@ export default function TradingDashboard() {
                   </span>
                 </div>
               </div>
+              {feedHint && (
+                <div className="flex items-start gap-2 rounded-xl px-3 py-2 text-xs font-semibold bg-rose-50 border border-rose-200 text-rose-800">
+                  <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                  <span>{feedHint}</span>
+                </div>
+              )}
               <div className="flex flex-col lg:flex-row gap-3">
                 <div className="relative lg:w-80 shrink-0">
                   <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
