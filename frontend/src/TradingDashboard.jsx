@@ -264,7 +264,10 @@ function TerminalStyles() {
 return (
 <style>{`
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
+html,body,#root,#__next{margin:0!important;padding:0!important;width:100%!important;max-width:none!important;min-height:100%;border:0!important;display:block!important;text-align:left!important;background:#F4F7FB}
+body{overflow-x:hidden}
 .td-root{
+width:100%; max-width:none; min-height:100vh; min-height:100dvh; margin:0; border:0;
 --td-blue:#2563EB; --td-blue-dark:#1D4ED8; --td-blue-soft:#EFF6FF; --td-blue-line:#BFDBFE;
 --td-bg:#F4F7FB; --td-line:#E2E8F0; --td-ink:#0F172A;
 font-family:'Inter',ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
@@ -853,7 +856,7 @@ Change
 </div>
 );
 return (
-<div className="td-root min-h-screen flex flex-col selection:bg-blue-600 selection:text-white">
+<div className="td-root w-full min-h-screen flex flex-col selection:bg-blue-600 selection:text-white">
 <TerminalStyles />
 {/* HEADER / TOP NAVIGATION BAR */}
 <header className="bg-white/90 border-b border-slate-200 px-4 sm:px-6 py-3 flex justify-between items-center gap-3 sticky top-0 z-40 backdrop-blur-xl">
@@ -887,10 +890,12 @@ activeTab === item.key
 </nav>
 </div>
 <div className="flex items-center gap-2 sm:gap-3">
-<div className="flex items-center gap-2 bg-slate-50 border border-slate-200 px-3 py-2 rounded-xl text-xs td-num">
-<Wallet className="w-4 h-4 text-blue-600" />
-<span className="text-slate-500 hidden sm:inline">Bal:</span>
-<span className="text-slate-900 font-extrabold">{fmtUSD(balanceUSD)}</span>
+<div className="flex items-center gap-2.5 bg-slate-900 border border-slate-800 px-3 sm:px-4 py-1.5 rounded-xl td-num shrink-0" title="Account balance" aria-label="Account balance">
+<Wallet className="w-4 h-4 text-blue-300" />
+<div className="leading-tight">
+<div className="text-[9px] uppercase tracking-[0.18em] text-slate-400 font-semibold">Balance</div>
+<div className="text-sm text-white font-extrabold">{fmtUSD(balanceUSD)}</div>
+</div>
 </div>
 <div className="hidden sm:flex items-center gap-2 bg-blue-50 border border-blue-200 px-3 py-2 rounded-xl text-xs td-num" title="Equity = Balance + floating PnL">
 <TrendingUp className="w-4 h-4 text-blue-600" />
@@ -997,7 +1002,7 @@ className="flex items-center gap-2 text-[11px] whitespace-nowrap hover:opacity-7
 </div>
 </div>
 {/* MAIN CONTAINER */}
-<main className="flex-1 p-4 sm:p-6 pb-28 md:pb-8 max-w-[1500px] w-full mx-auto">
+<main className="flex-1 p-4 sm:p-6 pb-28 md:pb-8 w-full max-w-none">
 {/* ======================= VIEW 1: ASSETS ======================= */}
 {activeTab === 'assets' && (
 <div className="space-y-4 td-enter">
@@ -1117,9 +1122,8 @@ className={`${BTN_PRIMARY} py-2 text-xs flex items-center justify-center gap-1.5
 <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 td-enter">
 {/* Account summary */}
 <div className="lg:col-span-3 space-y-3">
-<div className="grid grid-cols-2 lg:grid-cols-1 gap-3">
+<div className="grid grid-cols-3 lg:grid-cols-1 gap-3">
 {[
-{ l: 'Balance', v: fmtUSD(balanceUSD), c: 'text-slate-900', i: Wallet },
 { l: 'Equity', v: fmtUSD(equityUSD), c: 'text-blue-700', i: TrendingUp, sub: `Floating P&L ${floatingPnL >= 0 ? '+' : '-'}${fmtUSD(Math.abs(floatingPnL))}` },
 { l: 'Free Margin', v: fmtUSD(freeMargin), c: 'text-emerald-700', i: Layers },
 { l: 'Margin Level', v: `${marginLevel.toFixed(2)}%`, c: 'text-amber-700', i: Gauge }
