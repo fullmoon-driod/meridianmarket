@@ -29,7 +29,11 @@ import {
   AlertTriangle,
   Info,
   ChevronRight,
-  Activity
+  Activity,
+  Trash2,
+  Key,
+  Briefcase,
+  TrendingUp
 } from 'lucide-react';
 
 /* =====================================================================
@@ -42,10 +46,15 @@ const API = {
   clients: '/api/admin/clients-detailed',
   agents: '/api/crm/agents',
   agentLogin: '/api/admin/agent-login',
+  logout: '/api/auth/logout',
   assignAgent: '/api/admin/assign-agent',
   createAgent: '/api/admin/create-agent',
   adjustBalance: '/api/admin/adjust-balance',
-  // ---- NEW ----
+  portfolios: '/api/admin/portfolios',
+  deleteClient: (dbId) => `/api/admin/clients/${dbId}`,
+  deleteAgent: (id) => `/api/admin/agents/${id}`,
+  resetPassword: '/api/admin/reset-client-password',
+  // ---- KYC / messaging / dialer ----
   kycReview: '/api/crm/kyc/review',
   waMessages: '/api/crm/whatsapp/messages',
   waSend: '/api/crm/whatsapp/send',
@@ -58,6 +67,8 @@ const API = {
 };
 
 const JSON_HEADERS = { 'Content-Type': 'application/json' };
+// Leave empty to use the host that served this page; set only if the API lives elsewhere (e.g. 'wss://api.example.com').
+const CRM_WS_URL = '';
 
 /* =====================================================================
    HELPERS
@@ -70,6 +81,30 @@ const loadJSON = (key, fallback) => {
     return fallback;
   }
 };
+
+/* ---------------------------------------------------------------------
+   AUTHENTICATED API ACCESS
+   Every CRM call carries the session token issued by the server at login.
+   A 401 anywhere (expired session, deleted agent) signs the user out.
+   --------------------------------------------------------------------- */
+let AUTH_TOKEN = '';
+let onAuthExpired = null;
+const apiFetch = async (url, options = {}) => {
+  const headers = { ...(options.headers || {}) };
+  if (AUTH_TOKEN) headers.Authorization = `Bearer ${AUTH_TOKEN}`;
+  const res = await fetch(url, { ...options, headers });
+  if (res.status === 401 && AUTH_TOKEN && onAuthExpired) onAuthExpired();
+  return res;
+};
+const readJson = async (res) => {
+  try {
+    return await res.json();
+  } catch {
+    return {};
+  }
+};
+// <img>/<a> tags cannot send headers, so protected document URLs carry the token in the query string.
+const withToken = (u) => (u && u.startsWith('/api/') && AUTH_TOKEN ? `${u}${u.includes('?') ? '&' : '?'}token=${encodeURIComponent(AUTH_TOKEN)}` : u);
 
 const normalizeKyc = (s) => {
   const v = String(s || 'PENDING').trim().toUpperCase();
@@ -99,12 +134,13 @@ const normalizeDocs = (c) => {
   return raw
     .map((d, i) =>
       typeof d === 'string'
-        ? { id: `doc-${i}`, type: 'Document', url: safeUrl(d) }
+        ? { id: `doc-${i}`, type: 'Document', url: withToken(safeUrl(d)) }
         : {
             id: d.id ?? `doc-${i}`,
             type: d.type || d.doc_type || d.label || 'Document',
             name: d.name || d.filename || '',
-            url: safeUrl(d.url || d.path || d.file_url),
+            mime: d.mime || '',
+            url: withToken(safeUrl(d.url || d.path || d.file_url)),
             uploadedAt: d.uploadedAt || d.uploaded_at || d.created_at || ''
           }
     )
@@ -117,6 +153,9 @@ const cleanDial = (s) => String(s || '').replace(/[^\d+*#]/g, '');
 
 const fmtUSD = (n) =>
   '$' + (Number(n) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const fmtPnl = (n) => `${(Number(n) || 0) >= 0 ? '+' : '-'}${fmtUSD(Math.abs(Number(n) || 0))}`;
+const pnlTone = (n) => ((Number(n) || 0) >= 0 ? 'text-[var(--ok)]' : 'text-[var(--bad)]');
+const fmtPrice = (v) => (v === null || v === undefined || v === '' ? '—' : Number(v).toLocaleString('en-US', { maximumFractionDigits: Number(v) < 10 ? 5 : 2 }));
 const fmtDateTime = (v) => {
   const d = new Date(v);
   return isNaN(d) ? '—' : d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
@@ -370,6 +409,27 @@ function KycPanel({ client, onReview, onRetry, onPreview }) {
         <div className="rounded-xl border border-[rgba(251,113,133,.3)] bg-[rgba(251,113,133,.07)] p-3.5">
           <div className="mx-eyebrow !text-[var(--bad)] mb-1">Rejection note</div>
           <p className="text-sm text-slate-200 whitespace-pre-wrap">{client.kycNote}</p>
+        </div>
+      )}
+
+      {(client.kycFullName || client.kycIdNumber) && (
+        <div className="rounded-xl border border-[var(--line)] bg-[var(--bg)] p-4">
+          <div className="mx-eyebrow mb-2">Details submitted by the client</div>
+          <dl className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-sm">
+            <div>
+              <dt className="text-[11px] text-[var(--muted)]">Full legal name</dt>
+              <dd className="text-white break-words">{client.kycFullName || '—'}</dd>
+            </div>
+            <div>
+              <dt className="text-[11px] text-[var(--muted)]">Document type</dt>
+              <dd className="text-white">{client.kycDocType || '—'}</dd>
+            </div>
+            <div>
+              <dt className="text-[11px] text-[var(--muted)]">Document number</dt>
+              <dd className="text-white mx-num break-all">{client.kycIdNumber || '—'}</dd>
+            </div>
+          </dl>
+          {client.kycSubmittedAt && <div className="text-[11px] text-[var(--muted)] mt-2">Submitted {fmtDateTime(String(client.kycSubmittedAt).replace(' ', 'T') + 'Z')}</div>}
         </div>
       )}
 
@@ -756,7 +816,12 @@ export default function AdminPortal() {
   // -------------------------------------------------------------
   // 1. AUTH & ROLE MANAGEMENT
   // -------------------------------------------------------------
-  const [currentUser, setCurrentUser] = useState(() => loadJSON('meridian_crm_auth', null));
+  // A saved session without a server-issued token (older builds) is discarded: the user signs in again.
+  const [currentUser, setCurrentUser] = useState(() => {
+    const saved = loadJSON('meridian_crm_auth', null);
+    AUTH_TOKEN = saved && saved.token ? saved.token : '';
+    return AUTH_TOKEN ? saved : null;
+  });
   const [loginEmail, setLoginEmail] = useState('');
   const [loginPassword, setLoginPassword] = useState('');
   const [loginError, setLoginError] = useState('');
@@ -770,7 +835,7 @@ export default function AdminPortal() {
   // Fetch agents directly from database
   const fetchBackendAgents = useCallback(async () => {
     try {
-      const res = await fetch(API.agents);
+      const res = await apiFetch(API.agents);
       if (res.ok) {
         const data = await res.json();
         if (Array.isArray(data.agents)) {
@@ -788,58 +853,69 @@ export default function AdminPortal() {
     }
   }, [currentUser, fetchBackendAgents]);
 
+  // All credentials are verified by the server, which issues the session token every later call carries.
   const handleLogin = async (e) => {
     e.preventDefault();
     setLoginError('');
     const cleanedEmail = loginEmail.trim().toLowerCase();
-
-    // Primary Master Admin Credentials
-    if (cleanedEmail === 'klaus@meridianmarket.net' && loginPassword === 'Wizzy01@') {
-      const user = { name: 'Klaus Admin', email: cleanedEmail, role: 'ADMIN', agentId: 'ADMIN_01' };
-      setCurrentUser(user);
-      localStorage.setItem('meridian_crm_auth', JSON.stringify(user));
-      return;
-    }
-
-    // Check local agents (Fallback)
-    const matchedAgent = agents.find(
-      (ag) => ag.email && ag.email.trim().toLowerCase() === cleanedEmail && ag.password === loginPassword
-    );
-    if (matchedAgent) {
-      const user = { name: matchedAgent.name, email: matchedAgent.email, role: 'AGENT', agentId: matchedAgent.name.trim() };
-      setCurrentUser(user);
-      localStorage.setItem('meridian_crm_auth', JSON.stringify(user));
-      return;
-    }
-
-    // Backend Agent Authentication Check
     try {
       const res = await fetch(API.agentLogin, {
         method: 'POST',
         headers: JSON_HEADERS,
         body: JSON.stringify({ email: cleanedEmail, password: loginPassword })
       });
-      if (res.ok) {
-        const data = await res.json();
-        const agentData = data.agent || data;
-        const user = { name: agentData.name, email: agentData.email, role: 'AGENT', agentId: agentData.name.trim() };
+      const data = await readJson(res);
+      if (res.ok && data.token) {
+        const a = data.agent || {};
+        const isAdminRole = (data.role || a.role) === 'ADMIN';
+        const user = {
+          name: a.name,
+          email: a.email,
+          role: isAdminRole ? 'ADMIN' : 'AGENT',
+          agentId: isAdminRole ? 'ADMIN_01' : String(a.name || '').trim(),
+          dbAgentId: a.id,
+          token: data.token
+        };
+        AUTH_TOKEN = data.token;
         setCurrentUser(user);
         localStorage.setItem('meridian_crm_auth', JSON.stringify(user));
+        setLoginPassword('');
         return;
       }
+      setLoginError(res.status === 429 ? data.error || 'Too many attempts. Please wait a few minutes.' : 'Invalid credentials. Check email and password.');
     } catch (err) {
-      console.warn('Backend authentication failed, checking local credentials.', err);
+      console.warn('Login request failed.', err);
+      setLoginError('Cannot reach the server. Check your connection and try again.');
     }
-
-    setLoginError('Invalid credentials. Check email and password.');
   };
 
-  const handleLogout = () => {
+  const clearSession = useCallback(() => {
+    AUTH_TOKEN = '';
     setCurrentUser(null);
+    setClients([]);
+    setPortfolio({});
     localStorage.removeItem('meridian_crm_auth');
     setProfileClientId('');
     setNavOpen(false);
+  }, []);
+
+  const handleLogout = () => {
+    if (AUTH_TOKEN) fetch(API.logout, { method: 'POST', headers: { Authorization: `Bearer ${AUTH_TOKEN}` } }).catch(() => {});
+    clearSession();
   };
+
+  // A 401 from any call (expired session, agent deleted) returns the user to the sign-in screen.
+  useEffect(() => {
+    onAuthExpired = () => {
+      if (!AUTH_TOKEN) return;
+      clearSession();
+      setLoginError('Your session has ended. Please sign in again.');
+    };
+    return () => {
+      onAuthExpired = null;
+    };
+  }, [clearSession]);
+
 
   // -------------------------------------------------------------
   // 2. STATE & SEARCH & PERSISTENCE
@@ -850,14 +926,20 @@ export default function AdminPortal() {
   const [kycFilter, setKycFilter] = useState('ALL');
   const [navOpen, setNavOpen] = useState(false);
 
-  const [clients, setClients] = useState(() => {
-    const saved = loadJSON('meridian_crm_clients', []);
-    // Normalise legacy persisted records (VERIFIED → APPROVED)
-    return Array.isArray(saved) ? saved.map((c) => ({ ...c, kycStatus: normalizeKyc(c.kycStatus), kycDocs: c.kycDocs || [] })) : [];
-  });
+  // The server is the single source of truth for client data. Nothing about clients (balances, KYC,
+  // documents, personal details) is cached in the browser any more, so a stale copy can never win.
+  const [clients, setClients] = useState([]);
   useEffect(() => {
-    localStorage.setItem('meridian_crm_clients', JSON.stringify(clients));
-  }, [clients]);
+    try {
+      localStorage.removeItem('meridian_crm_clients'); // purge the old cached copy from earlier builds
+    } catch {
+      /* storage unavailable */
+    }
+  }, []);
+  // clientDbId -> live account (balance, floating P&L, equity, open positions) from the server
+  const [portfolio, setPortfolio] = useState({});
+  const [liveLink, setLiveLink] = useState('connecting'); // 'live' | 'connecting' | 'offline'
+  const [syncError, setSyncError] = useState('');
 
   const [auditLogs, setAuditLogs] = useState(() =>
     loadJSON('meridian_crm_audit', [
@@ -897,6 +979,9 @@ export default function AdminPortal() {
   const [newAgentName, setNewAgentName] = useState('');
   const [newAgentEmail, setNewAgentEmail] = useState('');
   const [newAgentPassword, setNewAgentPassword] = useState('');
+  const [pfSearch, setPfSearch] = useState('');
+  const [pfOnlyOpen, setPfOnlyOpen] = useState(false);
+  const [pfExpanded, setPfExpanded] = useState({});
 
   // Client profile drawer / document lightbox
   const [profileClientId, setProfileClientId] = useState('');
@@ -905,75 +990,243 @@ export default function AdminPortal() {
   const [kycSelectedId, setKycSelectedId] = useState('');
 
   // -------------------------------------------------------------
-  // 3. LIVE BACKEND FETCHING (MERGED TO PREVENT OVERWRITE)
+  // 3. LIVE BACKEND SYNC
+  // The server is authoritative. Every poll and every pushed event REPLACES the local value; nothing
+  // here "prefers" a stale local copy over what the database says.
   // -------------------------------------------------------------
+  const eventStampRef = useRef(0); // last time a live event patched state (guards against late poll responses)
+  const clientsRef = useRef([]);
+  clientsRef.current = clients;
+
   const fetchClients = useCallback(async () => {
+    const startedAt = Date.now();
     try {
-      const response = await fetch(API.clients);
-      if (response.ok) {
-        const data = await response.json();
-        const rawClients = data.clients || data;
-        if (Array.isArray(rawClients)) {
-          setClients((prevClients) => {
-            const prevClientMap = new Map(prevClients.map((c) => [c.id, c]));
-            return rawClients.map((c) => {
-              const formattedId = `CL-${c.id}`;
-              const existing = prevClientMap.get(formattedId);
-              const resolvedAgent = (c.agent_name || 'Unassigned').trim();
-              const fromServer = {
-                kycStatus: normalizeKyc(c.kycStatus || c.kyc_status),
-                kycNote: c.kyc_note || c.kycNote || c.kyc_rejection_note || '',
-                kycReviewedBy: c.kyc_reviewed_by || c.kycReviewedBy || '',
-                kycReviewedAt: c.kyc_reviewed_at || c.kycReviewedAt || '',
-                kycUnsynced: false
-              };
-              // A review the server has not confirmed yet is kept until it syncs.
-              const kycState = existing?.kycUnsynced
-                ? {
-                    kycStatus: existing.kycStatus,
-                    kycNote: existing.kycNote,
-                    kycReviewedBy: existing.kycReviewedBy,
-                    kycReviewedAt: existing.kycReviewedAt,
-                    kycUnsynced: true
-                  }
-                : fromServer;
-              return {
-                id: formattedId,
-                dbId: c.id,
-                name: c.full_name || c.name || 'Unknown',
-                email: c.email || 'N/A',
-                phone: c.phone || c.phone_number || 'N/A',
-                ip: c.ip_address || c.ip || '127.0.0.1',
-                assignedAgent: resolvedAgent,
-                agent_id: c.agent_id || null,
-                ...kycState,
-                kycDocs: normalizeDocs(c),
-                stage: c.stage || 'NEW_LEAD',
-                balanceUSD: existing?.balanceUSD ?? (typeof c.balanceUSD === 'number' ? c.balanceUSD : parseFloat(c.balanceUSD || c.balance || 0)),
-                bonusUSD: existing?.bonusUSD ?? (typeof c.bonusUSD === 'number' ? c.bonusUSD : parseFloat(c.bonusUSD || c.bonus || 0)),
-                isOnline: c.isOnline !== undefined ? c.isOnline : true,
-                callNotes: c.callNotes || [],
-                createdAt: c.createdAt || new Date().toISOString().split('T')[0],
-                lastContact: c.lastContact || new Date().toISOString().split('T')[0]
-              };
-            });
-          });
-        }
+      const response = await apiFetch(API.clients);
+      if (!response.ok) {
+        if (response.status !== 401) setSyncError(`Server returned ${response.status}`);
+        return;
       }
+      const data = await readJson(response);
+      const rawClients = data.clients || data;
+      if (!Array.isArray(rawClients)) return;
+      // A live event landed while this request was in flight: this answer may be older than that event.
+      if (eventStampRef.current > startedAt) {
+        setTimeout(() => fetchClientsRef.current && fetchClientsRef.current(), 50);
+        return;
+      }
+      setSyncError('');
+      const today = new Date().toISOString().split('T')[0];
+      setClients(
+        rawClients.map((c) => ({
+          id: `CL-${c.id}`,
+          dbId: c.id,
+          name: c.full_name || c.name || 'Unknown',
+          email: c.email || 'N/A',
+          phone: c.phone || c.phone_number || 'N/A',
+          ip: c.ip_address || c.ip || '127.0.0.1',
+          assignedAgent: (c.agent_name || 'Unassigned').trim(),
+          agent_id: c.agent_id || null,
+          kycStatus: normalizeKyc(c.kyc_status || c.kycStatus),
+          kycNote: c.kyc_note || '',
+          kycReviewedBy: c.kyc_reviewed_by || '',
+          kycReviewedAt: c.kyc_reviewed_at || '',
+          kycFullName: c.kyc_full_name || '',
+          kycDocType: c.kyc_doc_type || '',
+          kycIdNumber: c.kyc_id_number || '',
+          kycSubmittedAt: c.kyc_submitted_at || '',
+          kycUnsynced: false,
+          kycDocs: normalizeDocs(c),
+          stage: c.stage || 'NEW_LEAD',
+          balanceUSD: parseFloat(c.balance ?? c.balanceUSD) || 0,
+          bonusUSD: parseFloat(c.bonus ?? c.bonusUSD) || 0,
+          equityUSD: parseFloat(c.equity ?? c.balance ?? c.balanceUSD) || 0,
+          floatingPnl: parseFloat(c.floating_pnl) || 0,
+          marginUsed: parseFloat(c.margin_used) || 0,
+          openCount: c.open_positions || 0,
+          resetRequested: !!c.reset_requested,
+          mustChangePassword: !!c.must_change_password,
+          isOnline: c.isOnline !== undefined ? c.isOnline : true,
+          callNotes: c.callNotes || [],
+          createdAt: c.created_at ? String(c.created_at).slice(0, 10) : today,
+          lastContact: c.lastContact || today
+        }))
+      );
     } catch (err) {
-      console.warn('Backend unavailable, using persistent client state.', err);
+      setSyncError('Cannot reach the server');
+    }
+  }, []);
+  const fetchClientsRef = useRef(null);
+  fetchClientsRef.current = fetchClients;
+
+  // Every client's open positions + live equity in one call (also refreshed by pushed PORTFOLIO_TICKs)
+  const fetchPortfolios = useCallback(async () => {
+    try {
+      const res = await apiFetch(API.portfolios);
+      if (!res.ok) return;
+      const data = await readJson(res);
+      if (!Array.isArray(data.accounts)) return;
+      const map = {};
+      data.accounts.forEach((a) => {
+        if (a.openCount > 0) map[a.clientId] = a;
+      });
+      setPortfolio(map);
+    } catch {
+      /* the next poll or pushed tick will catch up */
     }
   }, []);
 
+  // Safety-net polling. Live updates arrive over the WebSocket below; this guarantees convergence
+  // even if the socket is blocked by a proxy.
   useEffect(() => {
-    if (currentUser) {
+    if (!currentUser) return;
+    fetchClients();
+    fetchPortfolios();
+    const interval = setInterval(() => {
       fetchClients();
-      const interval = setInterval(() => {
+      fetchPortfolios();
+    }, 5000);
+    return () => clearInterval(interval);
+  }, [currentUser, fetchClients, fetchPortfolios]);
+
+  // Real-time channel: balance, KYC, documents, positions and equity are pushed the instant they change.
+  useEffect(() => {
+    if (!currentUser || !currentUser.token) return undefined;
+    let alive = true;
+    let ws = null;
+    let retryTimer = null;
+    let refetchTimer = null;
+    let attempt = 0;
+    const patchClient = (dbId, patch) => setClients((prev) => prev.map((c) => (c.dbId === dbId ? { ...c, ...patch } : c)));
+    const scheduleRefetch = () => {
+      clearTimeout(refetchTimer);
+      refetchTimer = setTimeout(() => {
         fetchClients();
-      }, 5000);
-      return () => clearInterval(interval);
-    }
-  }, [currentUser, fetchClients]);
+        fetchPortfolios();
+      }, 150);
+    };
+    const known = (dbId) => clientsRef.current.some((c) => c.dbId === dbId);
+
+    const onMessage = (evt) => {
+      let m;
+      try {
+        m = JSON.parse(evt.data);
+      } catch {
+        return;
+      }
+      switch (m.type) {
+        case 'AUTH_OK':
+          setLiveLink('live');
+          break;
+        case 'AUTH_ERROR':
+          setLiveLink('offline');
+          break;
+        case 'BALANCE_UPDATE':
+          eventStampRef.current = Date.now();
+          patchClient(m.clientId, {
+            balanceUSD: m.balance,
+            bonusUSD: m.bonus,
+            equityUSD: m.equity,
+            floatingPnl: m.floatingPnl,
+            marginUsed: m.marginUsed,
+            openCount: m.openCount
+          });
+          break;
+        case 'KYC_UPDATE':
+          eventStampRef.current = Date.now();
+          patchClient(m.clientId, {
+            kycStatus: normalizeKyc(m.kyc_status),
+            kycNote: m.kyc_note || '',
+            kycReviewedBy: m.kyc_reviewed_by || '',
+            kycReviewedAt: m.kyc_reviewed_at || '',
+            kycFullName: m.kyc_full_name || '',
+            kycDocType: m.kyc_doc_type || '',
+            kycIdNumber: m.kyc_id_number || '',
+            kycSubmittedAt: m.kyc_submitted_at || '',
+            kycUnsynced: false
+          });
+          scheduleRefetch(); // pulls any newly uploaded document files
+          break;
+        case 'PORTFOLIO_TICK': {
+          const map = {};
+          (m.accounts || []).forEach((a) => {
+            map[a.clientId] = a;
+          });
+          setPortfolio(map);
+          break;
+        }
+        case 'POSITIONS_UPDATE':
+          setPortfolio((prev) => {
+            const next = { ...prev };
+            if (!m.positions || m.positions.length === 0) delete next[m.clientId];
+            else {
+              // Derive the figures from the positions themselves so the row is correct before the next equity tick
+              const floatingPnl = m.positions.reduce((t, x) => t + (Number(x.pnl) || 0), 0);
+              const marginUsed = m.positions.reduce((t, x) => t + (Number(x.margin) || 0), 0);
+              next[m.clientId] = { ...(prev[m.clientId] || {}), clientId: m.clientId, positions: m.positions, openCount: m.positions.length, floatingPnl, marginUsed };
+            }
+            return next;
+          });
+          break;
+        case 'CLIENT_EVENT':
+          scheduleRefetch();
+          if (m.event === 'AGENT_DELETED') fetchBackendAgents();
+          if (m.event === 'DOCUMENT_UPLOADED' && known(m.clientId)) toast('A client just uploaded verification documents — see the KYC Center.', 'warn');
+          if (m.event === 'PASSWORD_RESET_REQUESTED' && known(m.clientId)) toast('A client has requested a password reset.', 'warn');
+          break;
+        default:
+          break;
+      }
+    };
+
+    const connect = () => {
+      if (!alive) return;
+      const base = CRM_WS_URL || `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}`;
+      try {
+        ws = new WebSocket(base);
+      } catch {
+        setLiveLink('offline');
+        retryTimer = setTimeout(connect, 5000);
+        return;
+      }
+      const socket = ws;
+      socket.onopen = () => {
+        if (attempt > 0) scheduleRefetch(); // we may have missed events while disconnected
+        attempt = 0;
+        socket.send(JSON.stringify({ action: 'AUTH', token: currentUser.token }));
+      };
+      socket.onmessage = onMessage;
+      socket.onclose = () => {
+        if (!alive || socket !== ws) return;
+        setLiveLink('connecting');
+        attempt += 1;
+        retryTimer = setTimeout(connect, Math.min(1000 * 2 ** attempt, 15000));
+      };
+      socket.onerror = () => {
+        try {
+          socket.close();
+        } catch {
+          /* noop */
+        }
+      };
+    };
+    connect();
+    return () => {
+      alive = false;
+      clearTimeout(retryTimer);
+      clearTimeout(refetchTimer);
+      if (ws) {
+        ws.onclose = null;
+        ws.onerror = null;
+        try {
+          ws.close();
+        } catch {
+          /* noop */
+        }
+      }
+      setLiveLink('connecting');
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentUser?.token]);
 
   // Role-scoped client list (agents only ever see their own accounts)
   const scopedClients = useMemo(() => {
@@ -1031,17 +1284,8 @@ export default function AdminPortal() {
       return;
     }
     const cleanNote = status === 'REJECTED' ? String(note || '').trim() : '';
-    const review = {
-      kycStatus: status,
-      kycNote: cleanNote,
-      kycReviewedBy: currentUser.name,
-      kycReviewedAt: new Date().toISOString()
-    };
-    setClients((prev) => prev.map((c) => (c.id === clientId ? { ...c, ...review, kycUnsynced: true } : c)));
-
-    let synced = false;
     try {
-      const res = await fetch(API.kycReview, {
+      const res = await apiFetch(API.kycReview, {
         method: 'POST',
         headers: JSON_HEADERS,
         body: JSON.stringify({
@@ -1051,19 +1295,33 @@ export default function AdminPortal() {
           reviewedBy: currentUser.name
         })
       });
-      synced = res.ok;
+      const data = await readJson(res);
+      if (!res.ok || !data.success) {
+        if (res.status !== 401) toast(`KYC decision was NOT saved: ${data.error || `server returned ${res.status}`}.`, 'bad');
+        return;
+      }
+      // Apply exactly what the server stored (the same event also reaches the client's dashboard live).
+      setClients((prev) =>
+        prev.map((c) =>
+          c.id === clientId
+            ? {
+                ...c,
+                kycStatus: normalizeKyc(data.kyc_status),
+                kycNote: data.kyc_note || '',
+                kycReviewedBy: data.kyc_reviewed_by || currentUser.name,
+                kycReviewedAt: data.kyc_reviewed_at || new Date().toISOString(),
+                kycUnsynced: false
+              }
+            : c
+        )
+      );
+      eventStampRef.current = Date.now();
+      toast(`KYC ${status === 'APPROVED' ? 'approved' : status === 'REJECTED' ? 'rejected' : 'reset'} for ${target.name}.`, status === 'APPROVED' ? 'ok' : 'warn');
+      addAuditLog(`KYC_${status}`, `${status === 'APPROVED' ? 'Approved' : 'Rejected'} KYC for ${target.name} (${clientId})${cleanNote ? ` — ${cleanNote}` : ''}`);
     } catch (err) {
-      console.warn('KYC review sync failed.', err);
+      console.warn('KYC review failed.', err);
+      toast('KYC decision was NOT saved: the server could not be reached. Nothing has changed — please try again.', 'bad');
     }
-
-    if (synced) {
-      setClients((prev) => prev.map((c) => (c.id === clientId ? { ...c, kycUnsynced: false } : c)));
-      await fetchClients();
-      toast(`KYC ${status === 'APPROVED' ? 'approved' : 'rejected'} for ${target.name}.`, status === 'APPROVED' ? 'ok' : 'warn');
-    } else {
-      toast('Decision saved in this session, but the server did not confirm it. Use “retry” to sync.', 'warn');
-    }
-    addAuditLog(`KYC_${status}`, `${status === 'APPROVED' ? 'Approved' : 'Rejected'} KYC for ${target.name} (${clientId})${cleanNote ? ` — ${cleanNote}` : ''}`);
   };
 
   // -------------------------------------------------------------
@@ -1467,14 +1725,9 @@ export default function AdminPortal() {
       toast('Security Exception: Agents are unauthorized to assign accounts.', 'bad');
       return;
     }
-
     const targetClient = clients.find((c) => c.id === clientId);
-
-    // Optimistic UI update
-    setClients((prev) => prev.map((c) => (c.id === clientId ? { ...c, assignedAgent: selectedAgentValue } : c)));
-
     try {
-      const res = await fetch(API.assignAgent, {
+      const res = await apiFetch(API.assignAgent, {
         method: 'POST',
         headers: JSON_HEADERS,
         body: JSON.stringify({
@@ -1482,15 +1735,17 @@ export default function AdminPortal() {
           assignedAgent: selectedAgentValue
         })
       });
-      if (res.ok) {
-        await fetchClients();
+      const data = await readJson(res);
+      if (!res.ok) {
+        if (res.status !== 401) toast(`Assignment failed: ${data.error || `server returned ${res.status}`}.`, 'bad');
       } else {
-        console.error('Assignment error from server');
+        addAuditLog('AGENT_REASSIGN', `Assigned client ${clientId} to ${selectedAgentValue}`);
+        toast(`${targetClient?.name || clientId} assigned to ${selectedAgentValue}.`);
       }
     } catch (err) {
-      console.warn('Backend sync failed for agent assignment.', err);
+      toast('Assignment failed: the server could not be reached.', 'bad');
     }
-    addAuditLog('AGENT_REASSIGN', `Assigned client ${clientId} to ${selectedAgentValue}`);
+    await fetchClients(); // always re-read the truth (this also reverts the dropdown if the save failed)
   };
 
   const handleCreateAgent = async (e) => {
@@ -1505,28 +1760,31 @@ export default function AdminPortal() {
       email: newAgentEmail.trim().toLowerCase(),
       password: newAgentPassword
     };
-
     try {
-      const res = await fetch(API.createAgent, {
+      const res = await apiFetch(API.createAgent, {
         method: 'POST',
         headers: JSON_HEADERS,
         body: JSON.stringify(agentObj)
       });
-      if (res.ok) {
-        const data = await res.json();
-        if (data.agents) setAgents(data.agents);
-        await fetchBackendAgents();
+      const data = await readJson(res);
+      if (!res.ok) {
+        if (res.status !== 401) toast(`Could not create agent: ${data.error || `server returned ${res.status}`}.`, 'bad');
+        return;
       }
+      if (data.agents) setAgents(data.agents);
+      await fetchBackendAgents();
     } catch (err) {
-      console.warn('Backend sync unavailable for agent creation.', err);
+      toast('Could not create agent: the server could not be reached.', 'bad');
+      return;
     }
-    addAuditLog('AGENT_CREATED', `Created new agent ${newAgentName} (${newAgentEmail})`);
+    addAuditLog('AGENT_CREATED', `Created new agent ${agentObj.name} (${agentObj.email})`);
     setNewAgentName('');
     setNewAgentEmail('');
     setNewAgentPassword('');
     toast(`Agent ${agentObj.name} successfully created.`);
   };
 
+  // Balance / bonus changes are written by the server first; the UI only ever shows what it confirmed.
   const handleManualBalanceAdjustment = async (e) => {
     e.preventDefault();
     if (currentUser.role !== 'ADMIN') {
@@ -1539,26 +1797,8 @@ export default function AdminPortal() {
     const targetClient = clients.find((c) => c.id === selectedClientId);
     if (!targetClient) return toast('Target client not found.', 'bad');
 
-    setClients((prevClients) =>
-      prevClients.map((client) => {
-        if (client.id === selectedClientId) {
-          const currentBal = parseFloat(client.balanceUSD || 0);
-          const currentBonus = parseFloat(client.bonusUSD || 0);
-
-          if (adjustmentType === 'BONUS') {
-            return { ...client, bonusUSD: currentBonus + amt };
-          } else if (adjustmentType === 'ADD') {
-            return { ...client, balanceUSD: currentBal + amt };
-          } else if (adjustmentType === 'MINUS') {
-            return { ...client, balanceUSD: Math.max(0, currentBal - amt) };
-          }
-        }
-        return client;
-      })
-    );
-
     try {
-      await fetch(API.adjustBalance, {
+      const res = await apiFetch(API.adjustBalance, {
         method: 'POST',
         headers: JSON_HEADERS,
         body: JSON.stringify({
@@ -1567,13 +1807,97 @@ export default function AdminPortal() {
           amount: amt
         })
       });
+      const data = await readJson(res);
+      if (!res.ok || !data.success) {
+        if (res.status !== 401) toast(`Adjustment was NOT applied: ${data.error || `server returned ${res.status}`}.`, 'bad');
+        return;
+      }
+      eventStampRef.current = Date.now();
+      setClients((prev) =>
+        prev.map((c) =>
+          c.id === selectedClientId ? { ...c, balanceUSD: Number(data.balance), bonusUSD: Number(data.bonus), equityUSD: Number(data.equity ?? data.balance) } : c
+        )
+      );
+      const applied = Number(data.applied ?? amt);
+      addAuditLog('BALANCE_ADJUSTED', `Applied ${adjustmentType} of $${applied.toFixed(2)} to ${targetClient.name}`);
+      setAdjustmentAmount('');
+      toast(
+        `Applied ${adjustmentType} of $${applied.toFixed(2)} to ${targetClient.name}${applied !== amt ? ` (capped at the available balance)` : ''}. New balance ${fmtUSD(data.balance)} — the client sees it now.`
+      );
+    } catch (err) {
+      toast('Adjustment was NOT applied: the server could not be reached.', 'bad');
+    }
+  };
+
+  // ---- Permanent deletion (admin only) --------------------------------------------------
+  const [deleteTarget, setDeleteTarget] = useState(null); // { kind: 'client'|'agent', id, dbId, name, extra }
+  const [deleteConfirm, setDeleteConfirm] = useState('');
+  const [deleteBusy, setDeleteBusy] = useState(false);
+  const askDelete = (target) => {
+    setDeleteConfirm('');
+    setDeleteTarget(target);
+  };
+  const confirmDelete = async () => {
+    if (!deleteTarget || currentUser.role !== 'ADMIN') return;
+    setDeleteBusy(true);
+    try {
+      const url = deleteTarget.kind === 'client' ? API.deleteClient(deleteTarget.dbId) : API.deleteAgent(deleteTarget.dbId);
+      const res = await apiFetch(url, { method: 'DELETE' });
+      const data = await readJson(res);
+      if (!res.ok || !data.success) {
+        if (res.status !== 401) toast(`Delete failed: ${data.error || `server returned ${res.status}`}.`, 'bad');
+        return;
+      }
+      if (deleteTarget.kind === 'client') {
+        setProfileClientId('');
+        setClients((prev) => prev.filter((c) => c.dbId !== deleteTarget.dbId));
+        setPortfolio((prev) => {
+          const next = { ...prev };
+          delete next[deleteTarget.dbId];
+          return next;
+        });
+        addAuditLog('CLIENT_DELETED', `Permanently deleted client ${deleteTarget.name} (${deleteTarget.id}) and all related data`);
+        toast(`${deleteTarget.name} and all related data were permanently deleted.`, 'warn');
+      } else {
+        if (data.agents) setAgents(data.agents);
+        addAuditLog('AGENT_DELETED', `Deleted agent ${deleteTarget.name} (${data.unassignedClients || 0} client(s) unassigned)`);
+        toast(`Agent ${deleteTarget.name} deleted. ${data.unassignedClients || 0} client(s) are now unassigned.`, 'warn');
+        await fetchBackendAgents();
+      }
+      setDeleteTarget(null);
       await fetchClients();
     } catch (err) {
-      console.warn('Server sync unavailable, performing direct state balance adjustment.', err);
+      toast('Delete failed: the server could not be reached.', 'bad');
+    } finally {
+      setDeleteBusy(false);
     }
-    addAuditLog('BALANCE_ADJUSTED', `Applied ${adjustmentType} of $${amt.toFixed(2)} to ${targetClient.name}`);
-    setAdjustmentAmount('');
-    toast(`Successfully applied ${adjustmentType} of $${amt.toFixed(2)} to ${targetClient.name}.`);
+  };
+
+  // ---- Password reset (admin, or the client's own agent) ------------------------------
+  const [resetBusy, setResetBusy] = useState(false);
+  const [resetResult, setResetResult] = useState(null); // { clientId, password }
+  const handleResetPassword = async (client) => {
+    setResetBusy(true);
+    try {
+      const res = await apiFetch(API.resetPassword, {
+        method: 'POST',
+        headers: JSON_HEADERS,
+        body: JSON.stringify({ clientId: client.dbId })
+      });
+      const data = await readJson(res);
+      if (!res.ok || !data.success) {
+        if (res.status !== 401) toast(`Password reset failed: ${data.error || `server returned ${res.status}`}.`, 'bad');
+        return;
+      }
+      setResetResult({ clientId: client.id, password: data.temporaryPassword });
+      addAuditLog('PASSWORD_RESET', `Reset password for ${client.name} (${client.id})`);
+      toast(`Password reset for ${client.name}. They must choose a new one at next login.`);
+      await fetchClients();
+    } catch (err) {
+      toast('Password reset failed: the server could not be reached.', 'bad');
+    } finally {
+      setResetBusy(false);
+    }
   };
 
   const metrics = useMemo(() => {
@@ -1650,12 +1974,35 @@ export default function AdminPortal() {
   // LAYOUT PIECES
   // -------------------------------------------------------------
   const isAdmin = currentUser.role === 'ADMIN';
+
+  // Portfolio view: one row per client in scope. Balance always comes from the client record (updated by
+  // the server the instant it changes); floating P&L and positions come from the live portfolio feed.
+  const portfolioRows = scopedClients.map((c) => {
+    const live = portfolio[c.dbId];
+    const positions = live && Array.isArray(live.positions) ? live.positions : [];
+    const floating = live ? Number(live.floatingPnl) || 0 : 0;
+    const marginUsed = live ? Number(live.marginUsed) || 0 : 0;
+    const equity = (Number(c.balanceUSD) || 0) + floating;
+    return { client: c, positions, openCount: positions.length, floating, marginUsed, equity, freeMargin: equity - marginUsed };
+  });
+  const equityOf = (c) => (Number(c.balanceUSD) || 0) + (portfolio[c.dbId] ? Number(portfolio[c.dbId].floatingPnl) || 0 : 0);
+  const portfolioTotals = portfolioRows.reduce(
+    (t, r) => ({
+      balance: t.balance + (Number(r.client.balanceUSD) || 0),
+      equity: t.equity + r.equity,
+      floating: t.floating + r.floating,
+      open: t.open + r.openCount,
+      withPositions: t.withPositions + (r.openCount > 0 ? 1 : 0)
+    }),
+    { balance: 0, equity: 0, floating: 0, open: 0, withPositions: 0 }
+  );
   const navGroups = [
     {
       label: 'Workspace',
       items: [
         { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
         { id: 'clients', label: 'Clients', icon: Users, count: scopedClients.length },
+        { id: 'portfolios', label: 'Portfolios', icon: Briefcase, count: portfolioRows.filter((r) => r.openCount > 0).length },
         { id: 'kyc', label: 'KYC Center', icon: ShieldCheck, count: kycCounts.PENDING, warn: true },
         { id: 'whatsapp', label: 'WhatsApp', icon: MessageCircle },
         { id: 'dialer', label: 'Dialer', icon: PhoneCall }
@@ -1676,6 +2023,7 @@ export default function AdminPortal() {
   const pageTitles = {
     dashboard: 'Dashboard',
     clients: 'Clients',
+    portfolios: 'Portfolios',
     kyc: 'KYC Center',
     whatsapp: 'WhatsApp',
     dialer: 'Dialer',
@@ -1785,6 +2133,13 @@ export default function AdminPortal() {
             <span className="font-medium text-white truncate">{pageTitles[activeCrmTab]}</span>
           </div>
           <div className="ml-auto flex items-center gap-2">
+            <span
+              className={`mx-badge ${syncError ? 'mx-b-bad' : liveLink === 'live' ? 'mx-b-ok' : 'mx-b-warn'} !py-1 hidden sm:inline-flex`}
+              title={syncError ? `Sync problem: ${syncError}` : liveLink === 'live' ? 'Receiving balance, KYC and position updates in real time' : 'Reconnecting to the live channel — data still refreshes every 5 seconds'}
+            >
+              <Activity className="w-3 h-3" />
+              {syncError ? 'Sync issue' : liveLink === 'live' ? 'Live' : 'Reconnecting'}
+            </span>
             {liveCall && (
               <button
                 type="button"
@@ -2006,7 +2361,10 @@ export default function AdminPortal() {
                               <div className="flex items-center gap-3">
                                 <Avatar name={client.name} />
                                 <div className="min-w-0">
-                                  <div className="font-semibold text-white">{client.name}</div>
+                                  <div className="font-semibold text-white flex items-center gap-2 flex-wrap">
+                                    {client.name}
+                                    {client.resetRequested && <span className="mx-badge mx-b-warn !py-0 !text-[10px]">Reset requested</span>}
+                                  </div>
                                   <div className="text-xs text-[var(--muted)]">{client.email}</div>
                                 </div>
                               </div>
@@ -2044,6 +2402,11 @@ export default function AdminPortal() {
                             <td className="mx-td">
                               <div className="mx-num text-[var(--ok)] font-semibold">{fmtUSD(client.balanceUSD)}</div>
                               <div className="mx-num text-[var(--warn)] text-[11px]">Bonus: {fmtUSD(client.bonusUSD)}</div>
+                              {portfolio[client.dbId] && (
+                                <div className="mx-num text-[11px] text-[var(--muted)]">
+                                  Equity: <span className="text-white">{fmtUSD(equityOf(client))}</span>
+                                </div>
+                              )}
                             </td>
                             <td className="mx-td" onClick={(e) => e.stopPropagation()}>
                               {isAdmin ? (
@@ -2071,6 +2434,147 @@ export default function AdminPortal() {
               </div>
             </div>
           )}
+
+          {/* PORTFOLIOS */}
+          {activeCrmTab === 'portfolios' && (() => {
+            const q = pfSearch.trim().toLowerCase();
+            const rows = portfolioRows
+              .filter((r) => (!pfOnlyOpen || r.openCount > 0) && (!q || `${r.client.name} ${r.client.email} ${r.client.id}`.toLowerCase().includes(q)))
+              .sort((a, b) => b.openCount - a.openCount || b.equity - a.equity);
+            return (
+              <div className="space-y-4 mx-in-up">
+                <PageHeader
+                  title="Client Portfolios"
+                  subtitle={`Balance, floating P&L, equity and open positions for ${isAdmin ? 'every client' : 'your clients'} — straight from the trading engine, updated live.`}
+                />
+                <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+                  <StatCard label="Total balance" value={fmtUSD(portfolioTotals.balance)} tone="text-[var(--ok)]" hint={`${portfolioRows.length} account${portfolioRows.length === 1 ? '' : 's'}`} />
+                  <StatCard label="Total equity" value={fmtUSD(portfolioTotals.equity)} hint="Balance + floating P&L" />
+                  <StatCard label="Floating P&L" value={fmtPnl(portfolioTotals.floating)} tone={pnlTone(portfolioTotals.floating)} hint="Across all open positions" />
+                  <StatCard label="Open positions" value={portfolioTotals.open} hint={`${portfolioTotals.withPositions} account${portfolioTotals.withPositions === 1 ? '' : 's'} trading now`} />
+                </div>
+                <div className="mx-card p-4 flex flex-col sm:flex-row sm:items-center gap-3">
+                  <div className="relative sm:w-80">
+                    <Search className="w-4 h-4 text-[var(--muted)] absolute left-3 top-1/2 -translate-y-1/2" />
+                    <input type="text" placeholder="Search by name, email or ID..." aria-label="Search portfolios" value={pfSearch} onChange={(e) => setPfSearch(e.target.value)} className="mx-field !pl-9" />
+                  </div>
+                  <div className="flex gap-1.5">
+                    <button type="button" className={`mx-chip ${!pfOnlyOpen ? 'on' : ''}`} onClick={() => setPfOnlyOpen(false)}>All accounts</button>
+                    <button type="button" className={`mx-chip ${pfOnlyOpen ? 'on' : ''}`} onClick={() => setPfOnlyOpen(true)}>
+                      With open positions <span className="mx-num opacity-70">{portfolioTotals.withPositions}</span>
+                    </button>
+                  </div>
+                </div>
+                <div className="mx-card overflow-hidden">
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm min-w-[900px]">
+                      <thead>
+                        <tr className="border-b border-[var(--line)] bg-[rgba(255,255,255,.02)]">
+                          <th className="mx-th">Client</th>
+                          <th className="mx-th !text-right">Balance</th>
+                          <th className="mx-th !text-right">Floating P&amp;L</th>
+                          <th className="mx-th !text-right">Equity</th>
+                          <th className="mx-th !text-right">Margin used</th>
+                          <th className="mx-th !text-right">Positions</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-[var(--line)]">
+                        {rows.length === 0 ? (
+                          <tr>
+                            <td colSpan="6">
+                              <EmptyState icon={Briefcase} title="No portfolios to show" text={pfOnlyOpen ? 'No client has an open position right now.' : 'No clients match your search.'} />
+                            </td>
+                          </tr>
+                        ) : (
+                          rows.map((r) => {
+                            const open = !!pfExpanded[r.client.id];
+                            return (
+                              <React.Fragment key={r.client.id}>
+                                <tr
+                                  className="mx-row cursor-pointer"
+                                  onClick={() => setPfExpanded((p) => ({ ...p, [r.client.id]: !p[r.client.id] }))}
+                                  tabIndex={0}
+                                  aria-expanded={open}
+                                  onKeyDown={(e) => {
+                                    if (e.key === 'Enter' && e.target === e.currentTarget) setPfExpanded((p) => ({ ...p, [r.client.id]: !p[r.client.id] }));
+                                  }}
+                                >
+                                  <td className="mx-td">
+                                    <div className="flex items-center gap-3">
+                                      <ChevronRight className={`w-4 h-4 text-[var(--muted)] transition ${open ? 'rotate-90' : ''}`} />
+                                      <Avatar name={r.client.name} />
+                                      <div className="min-w-0">
+                                        <div className="font-semibold text-white">{r.client.name}</div>
+                                        <div className="text-xs text-[var(--muted)]">{r.client.id}{isAdmin ? ` · ${r.client.assignedAgent || 'Unassigned'}` : ''}</div>
+                                      </div>
+                                    </div>
+                                  </td>
+                                  <td className="mx-td text-right mx-num text-white">{fmtUSD(r.client.balanceUSD)}</td>
+                                  <td className={`mx-td text-right mx-num font-medium ${r.openCount ? pnlTone(r.floating) : 'text-[var(--muted)]'}`}>{r.openCount ? fmtPnl(r.floating) : '—'}</td>
+                                  <td className="mx-td text-right mx-num font-semibold text-white">{fmtUSD(r.equity)}</td>
+                                  <td className="mx-td text-right mx-num text-[var(--muted)]">{r.openCount ? fmtUSD(r.marginUsed) : '—'}</td>
+                                  <td className="mx-td text-right">
+                                    <span className={`mx-badge ${r.openCount ? 'mx-b-accent' : 'mx-b-neutral'}`}>{r.openCount} open</span>
+                                  </td>
+                                </tr>
+                                {open && (
+                                  <tr>
+                                    <td colSpan="6" className="!p-0 bg-[rgba(255,255,255,.015)]">
+                                      <div className="px-6 py-4">
+                                        {r.positions.length === 0 ? (
+                                          <div className="text-xs text-[var(--muted)]">No open positions. Equity equals balance.</div>
+                                        ) : (
+                                          <table className="w-full text-xs min-w-[640px]">
+                                            <thead>
+                                              <tr className="text-[var(--muted)] text-left">
+                                                <th className="py-1.5 font-medium">Symbol</th>
+                                                <th className="py-1.5 font-medium">Side</th>
+                                                <th className="py-1.5 font-medium text-right">Lots</th>
+                                                <th className="py-1.5 font-medium text-right">Open price</th>
+                                                <th className="py-1.5 font-medium text-right">Current</th>
+                                                <th className="py-1.5 font-medium text-right">Margin</th>
+                                                <th className="py-1.5 font-medium text-right">P&amp;L</th>
+                                                <th className="py-1.5 font-medium text-right">Opened</th>
+                                              </tr>
+                                            </thead>
+                                            <tbody className="divide-y divide-[var(--line)]">
+                                              {r.positions.map((p) => (
+                                                <tr key={p.id}>
+                                                  <td className="py-2 text-white font-medium">{p.symbol}</td>
+                                                  <td className="py-2">
+                                                    <span className={`mx-badge ${p.side === 'BUY' ? 'mx-b-ok' : 'mx-b-bad'} !py-0`}>{p.side}</span>
+                                                  </td>
+                                                  <td className="py-2 text-right mx-num text-white">{p.volume}</td>
+                                                  <td className="py-2 text-right mx-num">{fmtPrice(p.openPrice)}</td>
+                                                  <td className="py-2 text-right mx-num">{fmtPrice(p.currentPrice)}</td>
+                                                  <td className="py-2 text-right mx-num text-[var(--muted)]">{fmtUSD(p.margin)}</td>
+                                                  <td className={`py-2 text-right mx-num font-semibold ${pnlTone(p.pnl)}`}>{fmtPnl(p.pnl)}</td>
+                                                  <td className="py-2 text-right text-[var(--muted)]">{fmtDateTime(p.openedAt)}</td>
+                                                </tr>
+                                              ))}
+                                            </tbody>
+                                          </table>
+                                        )}
+                                        <div className="mt-3">
+                                          <button type="button" className="mx-btn mx-btn-sm" onClick={(e) => { e.stopPropagation(); openProfile(r.client.id); }}>
+                                            Open client profile
+                                          </button>
+                                        </div>
+                                      </div>
+                                    </td>
+                                  </tr>
+                                )}
+                              </React.Fragment>
+                            );
+                          })
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
 
           {/* KYC CENTER */}
           {activeCrmTab === 'kyc' && (
@@ -2280,7 +2784,7 @@ export default function AdminPortal() {
           {/* AGENTS MANAGEMENT TAB */}
           {activeCrmTab === 'agents' && isAdmin && (
             <div className="mx-in-up">
-              <PageHeader title="Manage Agents" subtitle="Create agent logins and see who is on your team." />
+              <PageHeader title="Manage Agents" subtitle="Create agent logins, see who is on your team, and remove agents who have left." />
               <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
                 {/* Create Agent Form */}
                 <div className="mx-card p-6 self-start">
@@ -2327,6 +2831,23 @@ export default function AdminPortal() {
                             <div className="text-[10px] uppercase tracking-wider text-[var(--muted)]">clients</div>
                           </div>
                           <span className="mx-num text-[11px] text-[var(--faint)] hidden sm:block">ID: {ag.id}</span>
+                          <button
+                            type="button"
+                            className="mx-icon-btn bad"
+                            title={`Delete agent ${ag.name}`}
+                            aria-label={`Delete agent ${ag.name}`}
+                            onClick={() =>
+                              askDelete({
+                                kind: 'agent',
+                                id: ag.id,
+                                dbId: ag.id,
+                                name: ag.name,
+                                extra: clients.filter((c) => (c.assignedAgent || '').trim().toLowerCase() === (ag.name || '').trim().toLowerCase()).length
+                              })
+                            }
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
                         </div>
                       ))}
                     </div>
@@ -2401,6 +2922,11 @@ export default function AdminPortal() {
                           <div className="mx-num text-lg font-semibold text-[var(--warn)] mt-1.5">{fmtUSD(financialTarget.bonusUSD)}</div>
                         </div>
                       </div>
+                      {portfolio[financialTarget.dbId] && (
+                        <div className="text-xs text-[var(--muted)] mx-num">
+                          Live equity <span className="text-white">{fmtUSD(equityOf(financialTarget))}</span> · {portfolio[financialTarget.dbId].openCount || 0} open position(s)
+                        </div>
+                      )}
                       <KycBadge status={financialTarget.kycStatus} />
                     </div>
                   ) : (
@@ -2455,6 +2981,19 @@ export default function AdminPortal() {
                 <button type="button" className="mx-btn mx-btn-sm" onClick={() => setProfileTab('whatsapp')} disabled={!validPhone(profileClient.phone)}>
                   <MessageCircle className="w-3.5 h-3.5 text-[var(--wa)]" /> WhatsApp
                 </button>
+                <button type="button" className="mx-btn mx-btn-sm" disabled={resetBusy} onClick={() => handleResetPassword(profileClient)} title="Reset to the temporary password; the client must choose a new one at next login">
+                  <Key className="w-3.5 h-3.5" /> {resetBusy ? 'Resetting…' : 'Reset password'}
+                </button>
+                {isAdmin && (
+                  <button
+                    type="button"
+                    className="mx-btn mx-btn-bad mx-btn-sm"
+                    onClick={() => askDelete({ kind: 'client', id: profileClient.id, dbId: profileClient.dbId, name: profileClient.name, extra: profileClient.openCount })}
+                    title="Permanently delete this client and all related data"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" /> Delete
+                  </button>
+                )}
                 {profileClient.kycStatus === 'PENDING' && (
                   <>
                     <button type="button" className="mx-btn mx-btn-ok mx-btn-sm ml-auto" onClick={() => handleKycReview(profileClient.id, 'APPROVED')}>
@@ -2495,6 +3034,54 @@ export default function AdminPortal() {
                       <div className="mx-num text-xl font-semibold text-[var(--warn)] mt-1.5">{fmtUSD(profileClient.bonusUSD)}</div>
                     </div>
                   </div>
+                  {(() => {
+                    const live = portfolio[profileClient.dbId];
+                    const pos = live && Array.isArray(live.positions) ? live.positions : [];
+                    const floating = live ? Number(live.floatingPnl) || 0 : 0;
+                    return (
+                      <>
+                        <div className="grid grid-cols-2 gap-3">
+                          <div className="rounded-xl bg-[var(--bg)] border border-[var(--line)] p-4">
+                            <div className="mx-eyebrow">Equity (live)</div>
+                            <div className="mx-num text-xl font-semibold text-white mt-1.5">{fmtUSD(equityOf(profileClient))}</div>
+                          </div>
+                          <div className="rounded-xl bg-[var(--bg)] border border-[var(--line)] p-4">
+                            <div className="mx-eyebrow">Floating P&amp;L</div>
+                            <div className={`mx-num text-xl font-semibold mt-1.5 ${pos.length ? pnlTone(floating) : 'text-[var(--muted)]'}`}>{pos.length ? fmtPnl(floating) : '—'}</div>
+                          </div>
+                        </div>
+                        <div>
+                          <div className="mx-eyebrow mb-2 flex items-center gap-2"><TrendingUp className="w-3.5 h-3.5" /> Open positions ({pos.length})</div>
+                          {pos.length === 0 ? (
+                            <div className="text-xs text-[var(--muted)] rounded-xl border border-dashed border-[var(--line-strong)] p-3 text-center">No open positions</div>
+                          ) : (
+                            <ul className="divide-y divide-[var(--line)] rounded-xl border border-[var(--line)] bg-[var(--bg)]">
+                              {pos.map((p) => (
+                                <li key={p.id} className="flex items-center gap-3 px-3 py-2.5 text-xs">
+                                  <span className={`mx-badge ${p.side === 'BUY' ? 'mx-b-ok' : 'mx-b-bad'} !py-0`}>{p.side}</span>
+                                  <span className="text-white font-medium">{p.symbol}</span>
+                                  <span className="text-[var(--muted)] mx-num">{p.volume} lots @ {fmtPrice(p.openPrice)}</span>
+                                  <span className={`ml-auto mx-num font-semibold ${pnlTone(p.pnl)}`}>{fmtPnl(p.pnl)}</span>
+                                </li>
+                              ))}
+                            </ul>
+                          )}
+                        </div>
+                      </>
+                    );
+                  })()}
+                  {profileClient.resetRequested && (
+                    <div className="rounded-xl border border-[rgba(245,181,61,.4)] bg-[rgba(245,181,61,.07)] p-3.5 text-sm text-slate-200">
+                      This client asked to reset their password. Verify who you are speaking to, then use <b>Reset password</b>.
+                    </div>
+                  )}
+                  {resetResult && resetResult.clientId === profileClient.id && (
+                    <div className="rounded-xl border border-[rgba(52,211,153,.4)] bg-[rgba(52,211,153,.07)] p-3.5 text-sm text-slate-200">
+                      <div className="mx-eyebrow !text-[var(--ok)] mb-1">Password reset</div>
+                      Temporary password: <span className="mx-num font-semibold text-white select-all">{resetResult.password}</span>
+                      <div className="text-xs text-[var(--muted)] mt-1">Give it to the client. They are asked to choose a new password the next time they sign in.</div>
+                    </div>
+                  )}
                   <dl className="divide-y divide-[var(--line)] text-sm">
                     {[
                       ['Email', profileClient.email],
@@ -2580,6 +3167,49 @@ export default function AdminPortal() {
                   })()}
                 </div>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* DELETE CONFIRMATION */}
+      {deleteTarget && (
+        <div className="fixed inset-0 z-[85] flex items-center justify-center p-4 bg-black/75" role="alertdialog" aria-modal="true" aria-label="Confirm permanent deletion">
+          <button type="button" className="absolute inset-0 cursor-default" aria-label="Cancel" onClick={() => !deleteBusy && setDeleteTarget(null)} />
+          <div className="relative mx-card p-6 w-full max-w-md mx-in-up shadow-2xl shadow-black/60">
+            <div className="flex items-start gap-3">
+              <div className="p-2.5 rounded-xl bg-[rgba(251,113,133,.12)] border border-[rgba(251,113,133,.35)]">
+                <Trash2 className="w-5 h-5 text-[var(--bad)]" />
+              </div>
+              <div className="min-w-0">
+                <h3 className="text-base font-semibold text-white">Permanently delete {deleteTarget.kind === 'client' ? 'client' : 'agent'}?</h3>
+                <p className="text-sm text-[var(--muted)] mt-1">
+                  <span className="text-white font-medium">{deleteTarget.name}</span> will be removed for good. This cannot be undone.
+                </p>
+              </div>
+            </div>
+            <ul className="text-xs text-slate-300 mt-4 space-y-1.5 list-disc pl-5">
+              {deleteTarget.kind === 'client' ? (
+                <>
+                  <li>Profile, login, balance and transaction history are erased.</li>
+                  <li>KYC details and uploaded documents are erased from the server.</li>
+                  <li>{deleteTarget.extra > 0 ? `${deleteTarget.extra} open position(s) are discarded without being settled.` : 'Open positions (if any) are discarded.'}</li>
+                  <li>If they are signed in, they are logged out immediately.</li>
+                </>
+              ) : (
+                <>
+                  <li>The agent can no longer sign in and any active session ends.</li>
+                  <li>{deleteTarget.extra > 0 ? `${deleteTarget.extra} assigned client(s) are kept and become Unassigned.` : 'No clients are assigned to this agent.'}</li>
+                </>
+              )}
+            </ul>
+            <label className="mx-label mt-5" htmlFor="del-confirm">Type <span className="text-white">DELETE</span> to confirm</label>
+            <input id="del-confirm" type="text" autoFocus autoComplete="off" value={deleteConfirm} onChange={(e) => setDeleteConfirm(e.target.value)} className="mx-field" placeholder="DELETE" />
+            <div className="flex justify-end gap-2 mt-5">
+              <button type="button" className="mx-btn" disabled={deleteBusy} onClick={() => setDeleteTarget(null)}>Cancel</button>
+              <button type="button" className="mx-btn mx-btn-bad" disabled={deleteBusy || deleteConfirm.trim() !== 'DELETE'} onClick={confirmDelete}>
+                <Trash2 className="w-4 h-4" /> {deleteBusy ? 'Deleting…' : 'Delete permanently'}
+              </button>
             </div>
           </div>
         </div>

@@ -4,6 +4,8 @@ const http = require('http');
 const WebSocket = require('ws');
 const cors = require('cors');
 const sqlite3 = require('sqlite3').verbose();
+const crypto = require('crypto');
+const util = require('util');
 const path = require('path');
 const fs = require('fs');
 // Load .env from the folder that contains server.js (works no matter where the process is
@@ -16,6 +18,35 @@ console.log(
     ? `[config] no .env file found at ${envFile} (using the process environment only)`
     : `[config] loaded .env from ${envFile}`,
 );
+
+// ============================================================================
+// CONFIGURATION
+// ----------------------------------------------------------------------------
+//   ADMIN_EMAIL / ADMIN_PASSWORD   master CRM admin login (checked on the SERVER now; it is no
+//                                  longer hard-coded in the browser bundle). Set both in .env.
+//   DEFAULT_RESET_PASSWORD         temporary password issued by a password reset (default A123456)
+//   ALLOW_SELF_SERVICE_RESET       'true' lets a client reset THEMSELVES to the temporary password
+//                                  from POST /api/forgot-password (email + registered phone must
+//                                  match). Default 'false': the request is queued for CRM staff.
+//   REQUIRE_CLIENT_TOKEN           'true' rejects client API calls that carry no session token.
+//                                  Turn it on once your login page stores `client.token`.
+//   ENFORCE_MARGIN                 'true' rejects orders that exceed free margin (default false)
+//   DEFAULT_LEVERAGE               leverage used when an order does not specify one (default 100)
+// ============================================================================
+const ADMIN_EMAIL = (process.env.ADMIN_EMAIL || 'klaus@meridianmarket.net').trim().toLowerCase();
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'Wizzy01@';
+const DEFAULT_RESET_PASSWORD = process.env.DEFAULT_RESET_PASSWORD || 'A123456';
+const ALLOW_SELF_SERVICE_RESET = String(process.env.ALLOW_SELF_SERVICE_RESET).toLowerCase() === 'true';
+const REQUIRE_CLIENT_TOKEN = String(process.env.REQUIRE_CLIENT_TOKEN).toLowerCase() === 'true';
+const ENFORCE_MARGIN = String(process.env.ENFORCE_MARGIN).toLowerCase() === 'true';
+const DEFAULT_LEVERAGE = Math.min(500, Math.max(1, parseInt(process.env.DEFAULT_LEVERAGE, 10) || 100));
+const STAFF_SESSION_MS = 24 * 60 * 60 * 1000;
+const CLIENT_SESSION_MS = 30 * 24 * 60 * 60 * 1000;
+const MAX_KYC_BYTES = 10 * 1024 * 1024;
+const MAX_KYC_DOCS_PER_CLIENT = 10;
+const UPLOAD_DIR = path.resolve(__dirname, 'uploads', 'kyc');
+const scrypt = util.promisify(crypto.scrypt);
+
 const app = express();
 // --- SSL CERTIFICATE CONFIGURATION ---
 let sslOptions = {};
@@ -28,472 +59,465 @@ try {
   console.error('Failed to load SSL certificates:', err.message);
 }
 const server = https.createServer(sslOptions, app);
-const wss = new WebSocket.Server({ server });
+const wss = new WebSocket.Server({ server, maxPayload: 1024 * 1024 });
 // --- CORS & MIDDLEWARE CONFIGURATION ---
 app.use(
   cors({
     origin: true,
     credentials: true,
     allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   }),
 );
 app.options('*', cors());
-app.use(express.json());
+app.use(express.json({ limit: '16mb' })); // KYC uploads arrive as base64 (10MB file ~ 13.4MB)
 app.set('trust proxy', true);
 // --- SERVE FRONTEND STATIC FILES ---
 const staticPath = path.resolve(__dirname, '../frontend/dist');
 app.use(express.static(staticPath));
-// --- DATABASE SETUP ---
+
+// ============================================================================
+// SMALL UTILITIES
+// ============================================================================
+class HttpError extends Error {
+  constructor(status, message) {
+    super(message);
+    this.status = status;
+  }
+}
+const wrap = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
+const round2 = (n) => parseFloat(Number(n || 0).toFixed(2));
+const parseClientId = (raw) => {
+  if (raw === undefined || raw === null) return null;
+  const n = parseInt(String(raw).replace(/^CL-/i, ''), 10);
+  return Number.isInteger(n) && n > 0 ? n : null;
+};
+const digitsOnly = (s) => String(s || '').replace(/\D/g, '');
+const clientIpOf = (req) => (req.headers['x-forwarded-for'] || '').split(',')[0].trim() || req.socket.remoteAddress || '127.0.0.1';
+const safeEqual = (a, b) => {
+  const x = Buffer.from(String(a));
+  const y = Buffer.from(String(b));
+  return x.length === y.length && crypto.timingSafeEqual(x, y);
+};
+
+// In-memory sliding-window rate limiter (login / password-reset abuse protection)
+const rateBuckets = new Map();
+function rateLimited(key, max, windowMs) {
+  const now = Date.now();
+  const hits = (rateBuckets.get(key) || []).filter((t) => now - t < windowMs);
+  if (hits.length >= max) {
+    rateBuckets.set(key, hits);
+    return true;
+  }
+  hits.push(now);
+  rateBuckets.set(key, hits);
+  return false;
+}
+setInterval(() => {
+  const now = Date.now();
+  rateBuckets.forEach((hits, k) => {
+    const live = hits.filter((t) => now - t < 3600 * 1000);
+    if (live.length) rateBuckets.set(k, live);
+    else rateBuckets.delete(k);
+  });
+}, 10 * 60 * 1000).unref();
+
+// Password hashing (scrypt). Legacy plaintext rows are still accepted and upgraded on first login.
+async function hashPassword(pw) {
+  const salt = crypto.randomBytes(16).toString('hex');
+  const key = await scrypt(String(pw), salt, 64);
+  return `scrypt$${salt}$${key.toString('hex')}`;
+}
+async function verifyPassword(pw, stored) {
+  if (!stored) return false;
+  if (String(stored).startsWith('scrypt$')) {
+    const [, salt, hex] = String(stored).split('$');
+    const expected = Buffer.from(hex || '', 'hex');
+    const actual = await scrypt(String(pw), salt, expected.length || 64);
+    return expected.length === actual.length && crypto.timingSafeEqual(expected, actual);
+  }
+  return safeEqual(pw, stored); // legacy plaintext
+}
+const isHashed = (stored) => String(stored || '').startsWith('scrypt$');
+
+// ============================================================================
+// DATABASE
+// ============================================================================
+let db;
+const dbRun = (sql, params = []) =>
+  new Promise((resolve, reject) => {
+    db.run(sql, params, function (err) {
+      if (err) reject(err);
+      else resolve({ lastID: this.lastID, changes: this.changes });
+    });
+  });
+const dbGet = (sql, params = []) => new Promise((resolve, reject) => db.get(sql, params, (err, row) => (err ? reject(err) : resolve(row))));
+const dbAll = (sql, params = []) => new Promise((resolve, reject) => db.all(sql, params, (err, rows) => (err ? reject(err) : resolve(rows || []))));
+
 const dbPath = path.resolve(__dirname, 'meridian.db');
-const db = new sqlite3.Database(dbPath, (err) => {
-  if (err) {
-    console.error('Error opening database:', err.message);
-  } else {
-    console.log('Connected to SQLite database.');
-    initDatabase();
-  }
-});
-function initDatabase() {
-  db.serialize(() => {
-    db.run('PRAGMA foreign_keys = ON;');
-
-    // 1. CRM Agents Table
-    db.run(`
-      CREATE TABLE IF NOT EXISTS crm_agents (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        name TEXT NOT NULL,
-        email TEXT UNIQUE NOT NULL,
-        password TEXT NOT NULL,
-        role TEXT DEFAULT 'AGENT',
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-      )
-    `);
-    // 2. Clients Table
-    db.run(`
-      CREATE TABLE IF NOT EXISTS clients (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        full_name TEXT NOT NULL,
-        email TEXT UNIQUE NOT NULL,
-        phone TEXT NOT NULL,
-        password TEXT NOT NULL,
-        balance REAL DEFAULT 0.00,
-        bonus REAL DEFAULT 0.00,
-        ip_address TEXT,
-        agent_id INTEGER,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY (agent_id) REFERENCES crm_agents(id) ON DELETE SET NULL
-      )
-    `);
-    db.run(`ALTER TABLE clients ADD COLUMN agent_id INTEGER`, () => {});
-    db.run(`ALTER TABLE clients ADD COLUMN ip_address TEXT`, () => {});
-    db.run(`ALTER TABLE clients ADD COLUMN balance REAL DEFAULT 0.00`, () => {});
-    db.run(`ALTER TABLE clients ADD COLUMN bonus REAL DEFAULT 0.00`, () => {});
-    db.run(`ALTER TABLE clients ADD COLUMN kyc_status TEXT DEFAULT 'PENDING'`, () => {});
-    db.run(`ALTER TABLE clients ADD COLUMN kyc_updated_at DATETIME`, () => {});
-    // 3. Transactions Table
-    db.run(`
-      CREATE TABLE IF NOT EXISTS transactions (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        client_id INTEGER NOT NULL,
-        type TEXT NOT NULL,
-        amount REAL NOT NULL,
-        status TEXT DEFAULT 'PENDING',
-        method TEXT,
-        tx_hash TEXT,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE CASCADE
-      )
-    `);
-    // 4. Audit Logs Table
-    db.run(`
-      CREATE TABLE IF NOT EXISTS client_logs (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        client_id INTEGER NOT NULL,
-        action_type TEXT NOT NULL,
-        details TEXT,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE CASCADE
-      )
-    `);
-    // Ensure Daniel Mz exists in backend SQLite table
-    db.get(`SELECT id FROM crm_agents WHERE LOWER(name) LIKE '%daniel%'`, [], (err, row) => {
-      if (!row) {
-        db.run(
-          `INSERT INTO crm_agents (name, email, password, role) VALUES ('Daniel Mz', 'daniel@meridianmarket.net', 'agent123', 'AGENT')`,
-        );
-      }
-    });
-  });
-}
-function logClientActivity(clientId, actionType, details = {}) {
-  if (!clientId) return;
-  const numericId = parseInt(String(clientId).replace('CL-', ''), 10);
-  if (isNaN(numericId)) return;
-  db.run(
-    `INSERT INTO client_logs (client_id, action_type, details) VALUES (?, ?, ?)`,
-    [numericId, actionType, JSON.stringify(details)],
-    (err) => {
-      if (err) console.error('Activity Log Error:', err.message);
-    },
-  );
-}
-function broadcastBalanceUpdate(clientId) {
-  const numericId = parseInt(String(clientId).replace('CL-', ''), 10);
-  if (isNaN(numericId)) return;
-  db.get(`SELECT balance, bonus FROM clients WHERE id = ?`, [numericId], (err, row) => {
-    if (!err && row) {
-      const payload = JSON.stringify({
-        type: 'BALANCE_UPDATE',
-        clientId: numericId,
-        balance: row.balance,
-        bonus: row.bonus,
-      });
-      wss.clients.forEach((client) => {
-        if (client.readyState === WebSocket.OPEN) {
-          client.send(payload);
-        }
-      });
-    }
-  });
-}
-// --- AUTHENTICATION & CLIENT ENDPOINTS ---
-app.post('/api/register', (req, res) => {
-  const { fullName, email, phone, password } = req.body;
-  if (!fullName || !email || !phone || !password) {
-    return res.status(400).json({ error: 'All fields are required.' });
-  }
-  const normalizedEmail = email.toLowerCase().trim();
-  const cleanPassword = password.trim();
-  const clientIp = req.headers['x-forwarded-for']?.split(',')[0] || req.socket.remoteAddress || '127.0.0.1';
-
-  db.get(`SELECT id FROM crm_agents WHERE LOWER(name) LIKE '%daniel%' LIMIT 1`, [], (err, specificAgent) => {
-    const getAgentId = specificAgent
-      ? Promise.resolve(specificAgent.id)
-      : new Promise((resolve) => {
-          db.get(`SELECT id FROM crm_agents ORDER BY id ASC LIMIT 1`, [], (_, fallback) => resolve(fallback ? fallback.id : null));
-        });
-    getAgentId.then((defaultAgentId) => {
-      const initialBalance = 0.0;
-      db.run(
-        `INSERT INTO clients (full_name, email, phone, password, balance, ip_address, agent_id) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-        [fullName, normalizedEmail, phone, cleanPassword, initialBalance, clientIp, defaultAgentId],
-        function (dbErr) {
-          if (dbErr) {
-            if (dbErr.message.includes('UNIQUE constraint failed')) {
-              return res.status(400).json({ error: 'Email address is already registered.' });
-            }
-            return res.status(500).json({ error: `Registration Failed: ${dbErr.message}` });
-          }
-          const newClientId = this.lastID;
-          logClientActivity(newClientId, 'ACCOUNT_CREATED', { fullName, email: normalizedEmail, phone, ip_address: clientIp });
-          return res.json({
-            success: true,
-            client: {
-              id: newClientId,
-              full_name: fullName,
-              email: normalizedEmail,
-              phone,
-              balance: initialBalance,
-              agent_id: defaultAgentId,
-            },
-          });
-        },
-      );
-    });
-  });
-});
-app.post('/api/login', (req, res) => {
-  const { email, password } = req.body;
-  if (!email || !password) return res.status(400).json({ error: 'Email and password required.' });
-  const cleanEmail = email.toLowerCase().trim();
-  const cleanPassword = password.trim();
-  db.get(
-    `SELECT id, full_name, email, phone, balance, bonus, agent_id, kyc_status FROM clients WHERE LOWER(email) = ? AND password = ?`,
-    [cleanEmail, cleanPassword],
-    (err, client) => {
-      if (err || !client) {
-        return res.status(401).json({ error: 'Invalid email or password.' });
-      }
-      logClientActivity(client.id, 'CLIENT_LOGIN', { timestamp: new Date() });
-      return res.json({ success: true, client });
-    },
-  );
-});
-app.get('/api/client/profile/:clientId', (req, res) => {
-  const rawId = req.params.clientId;
-  const clientId = parseInt(String(rawId).replace('CL-', ''), 10);
-  if (isNaN(clientId)) return res.status(400).json({ error: 'Invalid client ID.' });
-  db.get(
-    `SELECT id, full_name, email, phone, balance, bonus, agent_id, kyc_status FROM clients WHERE id = ?`,
-    [clientId],
-    (err, client) => {
-      if (err || !client) return res.status(404).json({ error: 'Client not found.' });
-      return res.json({ success: true, client });
-    },
-  );
-});
-// --- ADMIN & CRM ENDPOINTS ---
-app.get('/api/admin/clients-detailed', (req, res) => {
-  const query = `
-    SELECT c.id, c.full_name, c.email, c.phone, c.password, c.balance, c.bonus, c.ip_address, c.created_at, c.agent_id, c.kyc_status,
-           COALESCE(a.name, 'Unassigned') as agent_name
-    FROM clients c
-    LEFT JOIN crm_agents a ON c.agent_id = a.id
-    ORDER BY c.id DESC
-  `;
-  db.all(query, [], (err, rows) => {
-    if (err) return res.status(500).json({ error: 'Failed to query clients.' });
-    return res.json({ clients: rows || [] });
-  });
-});
-// FLEXIBLE AGENT ASSIGNMENT ENDPOINT
-app.post('/api/admin/assign-agent', (req, res) => {
-  const { clientId, assignedAgent, agentId } = req.body;
-  const rawId = parseInt(String(clientId).replace('CL-', ''), 10);
-  if (isNaN(rawId)) {
-    return res.status(400).json({ error: 'Invalid Client ID provided.' });
-  }
-  if (assignedAgent === 'Unassigned') {
-    db.run(`UPDATE clients SET agent_id = NULL WHERE id = ?`, [rawId], function (err) {
-      if (err) return res.status(500).json({ error: 'Failed to unassign agent.' });
-      logClientActivity(rawId, 'AGENT_UNASSIGNED', {});
-      return res.json({ success: true, message: 'Client unassigned successfully.' });
-    });
-    return;
-  }
-  // Find target agent by ID or flexible Name search
-  const searchQuery = agentId
-    ? `SELECT id FROM crm_agents WHERE id = ?`
-    : `SELECT id FROM crm_agents WHERE LOWER(TRIM(name)) = LOWER(TRIM(?)) OR LOWER(name) LIKE LOWER(?)`;
-
-  const searchParams = agentId ? [agentId] : [assignedAgent, `%${assignedAgent}%`];
-  db.get(searchQuery, searchParams, (err, agentRow) => {
-    if (err || !agentRow) {
-      console.warn(`Could not match agent '${assignedAgent}' in DB. Setting unassigned.`);
-      return res.status(404).json({ error: 'Agent not found in database.' });
-    }
-    db.run(`UPDATE clients SET agent_id = ? WHERE id = ?`, [agentRow.id, rawId], function (updateErr) {
-      if (updateErr) return res.status(500).json({ error: 'Failed to update client agent.' });
-      logClientActivity(rawId, 'AGENT_ASSIGNED', { agentId: agentRow.id, assignedAgent });
-      return res.json({ success: true, message: 'Agent assigned successfully.' });
-    });
-  });
-});
-app.post('/api/admin/create-agent', (req, res) => {
-  const { name, email, password, role } = req.body;
-  if (!name || !email || !password) {
-    return res.status(400).json({ error: 'Agent name, email, and password are required.' });
-  }
-  const cleanEmail = email.toLowerCase().trim();
-  const cleanPassword = password.trim();
-  db.run(
-    `INSERT INTO crm_agents (name, email, password, role) VALUES (?, ?, ?, ?)`,
-    [name.trim(), cleanEmail, cleanPassword, role || 'AGENT'],
-    function (err) {
-      if (err) {
-        if (err.message.includes('UNIQUE constraint failed')) {
-          return res.status(400).json({ error: 'Agent email already exists.' });
-        }
-        return res.status(500).json({ error: 'Failed to create agent.' });
-      }
-      db.all(`SELECT id, name, email, role FROM crm_agents`, [], (_, agentsList) => {
-        return res.json({
-          success: true,
-          agent: { id: this.lastID, name: name.trim(), email: cleanEmail, role: role || 'AGENT' },
-          agents: agentsList,
-        });
-      });
-    },
-  );
-});
-const handleAgentLogin = (req, res) => {
-  const { email, password } = req.body;
-  if (!email || !password) {
-    return res.status(400).json({ error: 'Email and password are required.' });
-  }
-  const cleanEmail = email.toLowerCase().trim();
-  const cleanPassword = password.trim();
-  db.get(
-    `SELECT id, name, email, role FROM crm_agents WHERE LOWER(email) = ? AND password = ?`,
-    [cleanEmail, cleanPassword],
-    (err, agent) => {
-      if (err) return res.status(500).json({ error: 'Database error occurred during login.' });
-      if (!agent) return res.status(401).json({ error: 'Invalid agent credentials.' });
-      return res.json({ success: true, agent });
-    },
-  );
-};
-app.post('/api/admin/agent-login', handleAgentLogin);
-app.post('/api/crm/agent/login', handleAgentLogin);
-app.get('/api/crm/agents', (req, res) => {
-  db.all(`SELECT id, name, email, role FROM crm_agents`, [], (err, rows) => {
-    if (err) return res.status(500).json({ error: 'Failed to fetch agents.' });
-    return res.json({ agents: rows || [] });
-  });
-});
-app.get('/api/admin/pending-transactions', (req, res) => {
-  const query = `
-    SELECT t.id, t.client_id, t.type, t.amount, t.method, t.tx_hash, t.status, t.created_at, c.full_name, c.email
-    FROM transactions t JOIN clients c ON t.client_id = c.id WHERE t.status = 'PENDING' ORDER BY t.id DESC
-  `;
-  db.all(query, [], (err, rows) => {
-    if (err) return res.status(500).json({ error: 'Failed to fetch pending transactions.' });
-    return res.json({ transactions: rows || [] });
-  });
-});
-app.post('/api/admin/approve-transaction', (req, res) => {
-  const { transactionId, status } = req.body;
-  if (!transactionId || !['APPROVED', 'REJECTED'].includes(status)) {
-    return res.status(400).json({ error: 'Invalid transaction approval parameters.' });
-  }
-  db.get(`SELECT * FROM transactions WHERE id = ?`, [transactionId], (err, tx) => {
-    if (err || !tx) return res.status(404).json({ error: 'Transaction not found.' });
-    if (tx.status !== 'PENDING') return res.status(400).json({ error: 'Transaction already processed.' });
-    db.run(`UPDATE transactions SET status = ? WHERE id = ?`, [status, transactionId], function (updateErr) {
-      if (updateErr) return res.status(500).json({ error: 'Failed to update transaction status.' });
-      if (status === 'APPROVED') {
-        const delta = tx.type === 'WITHDRAWAL' ? -Math.abs(tx.amount) : Math.abs(tx.amount);
-        db.run(`UPDATE clients SET balance = MAX(0, balance + ?) WHERE id = ?`, [delta, tx.client_id], (balErr) => {
-          if (!balErr) broadcastBalanceUpdate(tx.client_id);
-        });
-      }
-      logClientActivity(tx.client_id, `TRANSACTION_${status}`, { transactionId, amount: tx.amount, type: tx.type });
-      return res.json({ success: true, message: `Transaction ${status.toLowerCase()} successfully.` });
-    });
-  });
-});
-const handleBalanceAdjustment = (req, res) => {
-  const rawClientId = req.body.clientId;
-  const clientId = parseInt(String(rawClientId).replace('CL-', ''), 10);
-  const amount = parseFloat(req.body.amount);
-  const rawType = (req.body.type || req.body.adjustmentType || 'ADD').toUpperCase();
-  if (isNaN(clientId) || isNaN(amount) || amount <= 0) {
-    return res.status(400).json({ error: 'Invalid client ID or amount.' });
-  }
-  if (rawType === 'BONUS') {
-    db.run(`UPDATE clients SET bonus = MAX(0, bonus + ?) WHERE id = ?`, [amount, clientId], function (err) {
-      if (err) return res.status(500).json({ error: 'Failed to update bonus balance.' });
-      db.run(`INSERT INTO transactions (client_id, type, amount, status, method) VALUES (?, 'BONUS', ?, 'APPROVED', 'ADMIN_BONUS')`, [
-        clientId,
-        amount,
-      ]);
-      logClientActivity(clientId, 'ADMIN_BONUS_ADDED', { amount, type: 'BONUS' });
-      broadcastBalanceUpdate(clientId);
-      return res.json({ success: true, message: 'Bonus updated successfully.' });
-    });
-  } else {
-    const isDeduction = rawType === 'DEDUCT' || rawType === 'MINUS';
-    const adjustment = isDeduction ? -Math.abs(amount) : Math.abs(amount);
-    db.run(`UPDATE clients SET balance = MAX(0, balance + ?) WHERE id = ?`, [adjustment, clientId], function (err) {
-      if (err) return res.status(500).json({ error: 'Failed to update balance.' });
-      db.run(`INSERT INTO transactions (client_id, type, amount, status, method) VALUES (?, ?, ?, 'APPROVED', 'ADMIN_ADJUSTMENT')`, [
-        clientId,
-        isDeduction ? 'DEBIT' : 'CREDIT',
-        Math.abs(amount),
-      ]);
-      logClientActivity(clientId, 'ADMIN_BALANCE_ADJUSTMENT', { amount: adjustment, type: rawType });
-      broadcastBalanceUpdate(clientId);
-      return res.json({ success: true, message: 'Client balance updated successfully.' });
-    });
-  }
-};
-app.post('/api/admin/update-balance', handleBalanceAdjustment);
-app.post('/api/admin/adjust-balance', handleBalanceAdjustment);
-app.post('/api/cashier/deposit', (req, res) => {
-  const { amount, method, txHash, clientId, type } = req.body;
-  const rawId = parseInt(String(clientId).replace('CL-', ''), 10);
-  const transactionType = (type || 'DEPOSIT').toUpperCase();
-  if (isNaN(rawId) || !amount || isNaN(amount) || amount <= 0) {
-    return res.status(400).json({ error: 'Invalid transaction parameters.' });
-  }
-  db.run(
-    `INSERT INTO transactions (client_id, type, amount, status, method, tx_hash) VALUES (?, ?, ?, 'PENDING', ?, ?)`,
-    [rawId, transactionType, parseFloat(amount), method || 'Crypto', txHash || 'N/A'],
-    function (err) {
-      if (err) return res.status(500).json({ error: 'Failed to record transaction.' });
-      logClientActivity(rawId, `${transactionType}_REQUESTED`, { amount, method, txHash });
-      return res.json({ success: true, message: 'Request submitted for CRM approval.', transactionId: this.lastID });
-    },
-  );
-});
-// --- KYC APPROVAL ENDPOINT ---
-const normalizeKycStatus = (body) => {
-  const raw = body.kycStatus ?? body.kyc_status ?? body.status ?? body.decision ?? body.action ?? body.approved;
-  if (raw === true) return 'APPROVED';
-  if (raw === false) return 'REJECTED';
-  const v = String(raw === undefined || raw === null ? '' : raw)
-    .trim()
-    .toUpperCase();
-  if (['APPROVED', 'APPROVE', 'VERIFIED', 'VERIFY', 'ACCEPTED', 'ACCEPT', 'TRUE'].includes(v)) return 'APPROVED';
-  if (['REJECTED', 'REJECT', 'DECLINED', 'DECLINE', 'DENIED', 'DENY', 'FALSE'].includes(v)) return 'REJECTED';
-  if (['PENDING', 'RESET', 'UNVERIFIED'].includes(v)) return 'PENDING';
-  return null;
-};
-
-const handleKycUpdate = (req, res) => {
-  const body = req.body || {};
-  const rawClientId = body.clientId ?? body.client_id ?? body.id ?? body.userId ?? req.params.clientId;
-  const clientId = parseInt(String(rawClientId).replace('CL-', ''), 10);
-  const kycStatus = normalizeKycStatus(body);
-
-  if (isNaN(clientId)) return res.status(400).json({ success: false, error: 'Invalid client ID.' });
-  if (!kycStatus) return res.status(400).json({ success: false, error: 'Invalid KYC status. Use APPROVED, REJECTED or PENDING.' });
-
-  db.run(`UPDATE clients SET kyc_status = ?, kyc_updated_at = CURRENT_TIMESTAMP WHERE id = ?`, [kycStatus, clientId], function (err) {
+const dbReady = new Promise((resolve, reject) => {
+  db = new sqlite3.Database(dbPath, (err) => {
     if (err) {
-      console.error('KYC Update Error:', err.message);
-      return res.status(500).json({ success: false, error: 'Failed to update KYC status.' });
+      console.error('Error opening database:', err.message);
+      return reject(err);
     }
-    if (this.changes === 0) return res.status(404).json({ success: false, error: 'Client not found.' });
-
-    logClientActivity(clientId, `KYC_${kycStatus}`, { kycStatus, note: body.note || body.reason || null });
-
-    return res.status(200).json({
-      success: true,
-      confirmed: true,
-      clientId,
-      kyc_status: kycStatus,
-      kycStatus,
-      status: kycStatus,
-      message: `KYC ${kycStatus.toLowerCase()} successfully.`,
-    });
+    console.log('Connected to SQLite database.');
+    initDatabase().then(resolve, reject);
   });
+});
+dbReady.catch((e) => console.error('Database initialisation failed:', e));
+
+async function addColumn(table, column, ddl) {
+  const cols = await dbAll(`PRAGMA table_info(${table})`);
+  if (!cols.some((c) => c.name === column)) await dbRun(`ALTER TABLE ${table} ADD COLUMN ${column} ${ddl}`);
+}
+
+async function initDatabase() {
+  await dbRun('PRAGMA foreign_keys = ON');
+  await dbRun('PRAGMA journal_mode = WAL').catch(() => {});
+  await dbRun('PRAGMA busy_timeout = 5000').catch(() => {});
+
+  await dbRun(`
+    CREATE TABLE IF NOT EXISTS crm_agents (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      email TEXT UNIQUE NOT NULL,
+      password TEXT NOT NULL,
+      role TEXT DEFAULT 'AGENT',
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )`);
+  await dbRun(`
+    CREATE TABLE IF NOT EXISTS clients (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      full_name TEXT NOT NULL,
+      email TEXT UNIQUE NOT NULL,
+      phone TEXT NOT NULL,
+      password TEXT NOT NULL,
+      balance REAL DEFAULT 0.00,
+      bonus REAL DEFAULT 0.00,
+      ip_address TEXT,
+      agent_id INTEGER,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (agent_id) REFERENCES crm_agents(id) ON DELETE SET NULL
+    )`);
+  // Columns added over time (checked against the real schema, not "try and ignore the error")
+  await addColumn('clients', 'agent_id', 'INTEGER');
+  await addColumn('clients', 'ip_address', 'TEXT');
+  await addColumn('clients', 'balance', 'REAL DEFAULT 0.00');
+  await addColumn('clients', 'bonus', 'REAL DEFAULT 0.00');
+  await addColumn('clients', 'kyc_status', "TEXT DEFAULT 'PENDING'");
+  await addColumn('clients', 'kyc_updated_at', 'DATETIME');
+  await addColumn('clients', 'kyc_note', 'TEXT');
+  await addColumn('clients', 'kyc_reviewed_by', 'TEXT');
+  await addColumn('clients', 'kyc_reviewed_at', 'DATETIME');
+  await addColumn('clients', 'kyc_full_name', 'TEXT');
+  await addColumn('clients', 'kyc_doc_type', 'TEXT');
+  await addColumn('clients', 'kyc_id_number', 'TEXT');
+  await addColumn('clients', 'kyc_submitted_at', 'DATETIME');
+  await addColumn('clients', 'must_change_password', 'INTEGER DEFAULT 0');
+  await addColumn('clients', 'password_updated_at', 'DATETIME');
+
+  await dbRun(`
+    CREATE TABLE IF NOT EXISTS transactions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      client_id INTEGER NOT NULL,
+      type TEXT NOT NULL,
+      amount REAL NOT NULL,
+      status TEXT DEFAULT 'PENDING',
+      method TEXT,
+      tx_hash TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE CASCADE
+    )`);
+  await dbRun(`
+    CREATE TABLE IF NOT EXISTS client_logs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      client_id INTEGER NOT NULL,
+      action_type TEXT NOT NULL,
+      details TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE CASCADE
+    )`);
+  // Uploaded verification documents (files live in ./uploads/kyc, metadata lives here)
+  await dbRun(`
+    CREATE TABLE IF NOT EXISTS kyc_documents (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      client_id INTEGER NOT NULL,
+      doc_type TEXT,
+      file_name TEXT,
+      mime_type TEXT NOT NULL,
+      size INTEGER,
+      stored_name TEXT NOT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE CASCADE
+    )`);
+  // Server-side positions: the single source of truth the CRM and the client both read
+  await dbRun(`
+    CREATE TABLE IF NOT EXISTS positions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      client_id INTEGER NOT NULL,
+      symbol TEXT NOT NULL,
+      side TEXT NOT NULL,
+      volume REAL NOT NULL,
+      leverage INTEGER DEFAULT 100,
+      open_price REAL NOT NULL,
+      margin REAL DEFAULT 0,
+      sl REAL DEFAULT 0,
+      tp REAL DEFAULT 0,
+      status TEXT DEFAULT 'OPEN',
+      close_price REAL,
+      realized_pnl REAL,
+      opened_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      closed_at DATETIME,
+      FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE CASCADE
+    )`);
+  await dbRun(`
+    CREATE TABLE IF NOT EXISTS sessions (
+      token_hash TEXT PRIMARY KEY,
+      kind TEXT NOT NULL,
+      subject_id INTEGER NOT NULL,
+      name TEXT,
+      email TEXT,
+      created_at INTEGER NOT NULL,
+      expires_at INTEGER NOT NULL
+    )`);
+  await dbRun(`
+    CREATE TABLE IF NOT EXISTS password_resets (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      client_id INTEGER NOT NULL,
+      status TEXT DEFAULT 'PENDING',
+      requested_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      resolved_at DATETIME,
+      resolved_by TEXT,
+      FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE CASCADE
+    )`);
+  // Deliberately holds no personal data: only that an account was removed, by whom and when.
+  await dbRun(`
+    CREATE TABLE IF NOT EXISTS deleted_accounts_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      kind TEXT NOT NULL,
+      subject_id INTEGER NOT NULL,
+      deleted_by TEXT,
+      deleted_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )`);
+  await dbRun(`CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)`);
+
+  await dbRun(`CREATE INDEX IF NOT EXISTS idx_positions_client_status ON positions (client_id, status)`);
+  await dbRun(`CREATE INDEX IF NOT EXISTS idx_kycdocs_client ON kyc_documents (client_id)`);
+  await dbRun(`CREATE INDEX IF NOT EXISTS idx_clients_agent ON clients (agent_id)`);
+  await dbRun(`CREATE INDEX IF NOT EXISTS idx_sessions_subject ON sessions (kind, subject_id)`);
+
+  // Normalise KYC values written by earlier versions so a status can never "reset" on read
+  await dbRun(`UPDATE clients SET kyc_status = 'APPROVED' WHERE UPPER(COALESCE(kyc_status,'')) IN ('VERIFIED','APPROVE')`);
+  await dbRun(`UPDATE clients SET kyc_status = 'PENDING' WHERE kyc_status IS NULL OR TRIM(kyc_status) = ''`);
+
+  // Seed the original default agent ONCE (first run only) so deleting that agent sticks across restarts.
+  const seeded = await dbGet(`SELECT value FROM meta WHERE key = 'default_agent_seeded'`);
+  if (!seeded) {
+    const anyAgent = await dbGet(`SELECT id FROM crm_agents LIMIT 1`);
+    if (!anyAgent) {
+      await dbRun(`INSERT INTO crm_agents (name, email, password, role) VALUES (?, ?, ?, 'AGENT')`, [
+        'Daniel Mz',
+        'daniel@meridianmarket.net',
+        await hashPassword('agent123'),
+      ]);
+    }
+    await dbRun(`INSERT OR REPLACE INTO meta (key, value) VALUES ('default_agent_seeded', '1')`);
+  }
+
+  await fs.promises.mkdir(UPLOAD_DIR, { recursive: true });
+  await dbRun(`DELETE FROM sessions WHERE expires_at < ?`, [Date.now()]);
+  await loadAccountState();
+  console.log('[db] schema ready');
+}
+setInterval(() => {
+  if (db) dbRun(`DELETE FROM sessions WHERE expires_at < ?`, [Date.now()]).catch(() => {});
+}, 60 * 60 * 1000).unref();
+
+// Make sure no request is served before the schema exists
+app.use('/api', (req, res, next) => {
+  dbReady.then(() => next(), () => res.status(503).json({ success: false, error: 'Database unavailable.' }));
+});
+
+// ============================================================================
+// IN-MEMORY ACCOUNT STATE (kept in step with the DB; used for live equity)
+// ============================================================================
+const accountCache = new Map(); // clientId -> { balance, bonus, agentId }
+let openPositions = []; // every OPEN position of every client (mirrors the `positions` table)
+
+async function loadAccountState() {
+  accountCache.clear();
+  (await dbAll(`SELECT id, balance, bonus, agent_id FROM clients`)).forEach((r) =>
+    accountCache.set(r.id, { balance: r.balance || 0, bonus: r.bonus || 0, agentId: r.agent_id }),
+  );
+  openPositions = (await dbAll(`SELECT * FROM positions WHERE status = 'OPEN'`)).map(rowToPosition);
+  console.log(`[db] loaded ${accountCache.size} accounts and ${openPositions.length} open positions`);
+}
+function rowToPosition(r) {
+  return {
+    id: r.id,
+    clientId: r.client_id,
+    symbol: r.symbol,
+    side: r.side,
+    volume: r.volume,
+    leverage: r.leverage,
+    openPrice: r.open_price,
+    margin: r.margin,
+    sl: r.sl || 0,
+    tp: r.tp || 0,
+    openedAt: r.opened_at ? new Date(String(r.opened_at).replace(' ', 'T') + (String(r.opened_at).includes('Z') ? '' : 'Z')).toISOString() : new Date().toISOString(),
+    pnl: 0,
+    currentPrice: null,
+  };
+}
+
+// ============================================================================
+// SESSIONS & AUTH
+// ============================================================================
+const hashToken = (t) => crypto.createHash('sha256').update(String(t)).digest('hex');
+
+async function createSession(kind, subjectId, name, email) {
+  const token = crypto.randomBytes(32).toString('hex');
+  const now = Date.now();
+  const ttl = kind === 'CLIENT' ? CLIENT_SESSION_MS : STAFF_SESSION_MS;
+  await dbRun(`INSERT INTO sessions (token_hash, kind, subject_id, name, email, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?)`, [
+    hashToken(token),
+    kind,
+    subjectId,
+    name || '',
+    email || '',
+    now,
+    now + ttl,
+  ]);
+  return token;
+}
+
+// -> { kind: 'ADMIN'|'AGENT'|'CLIENT', id, name, email } or null
+async function lookupSession(token) {
+  if (!token) return null;
+  const row = await dbGet(`SELECT * FROM sessions WHERE token_hash = ?`, [hashToken(token)]);
+  if (!row) return null;
+  if (row.expires_at < Date.now()) {
+    await dbRun(`DELETE FROM sessions WHERE token_hash = ?`, [row.token_hash]).catch(() => {});
+    return null;
+  }
+  if (row.kind === 'ADMIN') return { kind: 'ADMIN', id: 0, name: row.name, email: row.email };
+  if (row.kind === 'AGENT') {
+    const a = await dbGet(`SELECT id, name, email FROM crm_agents WHERE id = ?`, [row.subject_id]);
+    return a ? { kind: 'AGENT', id: a.id, name: a.name, email: a.email } : null; // deleted agent => session dies
+  }
+  if (row.kind === 'CLIENT') {
+    const c = await dbGet(`SELECT id, full_name, email FROM clients WHERE id = ?`, [row.subject_id]);
+    return c ? { kind: 'CLIENT', id: c.id, name: c.full_name, email: c.email } : null; // deleted client => session dies
+  }
+  return null;
+}
+
+const bearerToken = (req) => {
+  const h = req.headers.authorization || '';
+  return /^Bearer\s+/i.test(h) ? h.replace(/^Bearer\s+/i, '').trim() : '';
 };
 
-[
-  '/api/admin/kyc-status',
-  '/api/admin/update-kyc',
-  '/api/admin/approve-kyc',
-  '/api/admin/kyc',
-  '/api/crm/kyc-status',
-  '/api/crm/kyc',
-  '/api/crm/client/:clientId/kyc',
-  '/api/client/kyc',
-].forEach((route) => {
-  app.post(route, handleKycUpdate);
-  app.put(route, handleKycUpdate);
-  app.patch(route, handleKycUpdate);
-});
-
-app.get('/api/crm/client/:clientId/kyc', (req, res) => {
-  const clientId = parseInt(String(req.params.clientId).replace('CL-', ''), 10);
-  if (isNaN(clientId)) return res.status(400).json({ error: 'Invalid client ID.' });
-  db.get(`SELECT id, kyc_status, kyc_updated_at FROM clients WHERE id = ?`, [clientId], (err, row) => {
-    if (err || !row) return res.status(404).json({ error: 'Client not found.' });
-    return res.json({ success: true, clientId: row.id, kyc_status: row.kyc_status || 'PENDING', kyc_updated_at: row.kyc_updated_at });
+// Staff (admin / agent) guard. roles: which staff kinds may pass.
+function staffAuth(roles = ['ADMIN', 'AGENT'], { queryToken = false } = {}) {
+  return wrap(async (req, res, next) => {
+    const token = bearerToken(req) || (queryToken ? String(req.query.token || '') : '');
+    const session = await lookupSession(token);
+    if (!session || session.kind === 'CLIENT') throw new HttpError(401, 'Authentication required. Please sign in again.');
+    if (!roles.includes(session.kind)) throw new HttpError(403, 'You do not have permission to do that.');
+    req.auth = session;
+    next();
   });
-});
+}
 
-app.get('/api/crm/client/:clientId/activity', (req, res) => {
-  const rawId = req.params.clientId;
-  const clientId = parseInt(String(rawId).replace('CL-', ''), 10);
-  if (isNaN(clientId)) return res.status(400).json({ error: 'Invalid client ID.' });
-  db.all(`SELECT * FROM client_logs WHERE client_id = ? ORDER BY id DESC LIMIT 50`, [clientId], (err, rows) => {
-    if (err) return res.status(500).json({ error: 'Failed to fetch activity logs.' });
-    const formatted = (rows || []).map((r) => ({ ...r, details: JSON.parse(r.details || '{}') }));
-    return res.json({ logs: formatted });
+// Client guard. Works with a client session token; falls back to the bare client id only while
+// REQUIRE_CLIENT_TOKEN is off (so an older login page that does not store the token keeps working).
+function clientAuth({ allowStaff = false } = {}) {
+  return wrap(async (req, res, next) => {
+    const token = bearerToken(req);
+    const session = token ? await lookupSession(token) : null;
+    const claimed = parseClientId(req.params.clientId ?? (req.body && req.body.clientId) ?? req.query.clientId);
+    if (session && session.kind === 'CLIENT') {
+      if (claimed !== null && claimed !== session.id) throw new HttpError(403, 'This session belongs to a different account.');
+      req.clientId = session.id;
+      req.auth = session;
+      return next();
+    }
+    if (session && allowStaff) {
+      if (claimed === null) throw new HttpError(400, 'Invalid client ID.');
+      if (session.kind === 'AGENT') await getClientForStaff(session, claimed); // scope check
+      req.clientId = claimed;
+      req.auth = session;
+      return next();
+    }
+    if (token) throw new HttpError(401, 'Session expired. Please sign in again.');
+    if (REQUIRE_CLIENT_TOKEN) throw new HttpError(401, 'Authentication required. Please sign in again.');
+    if (claimed === null) throw new HttpError(400, 'Invalid client ID.');
+    req.clientId = claimed;
+    req.auth = null;
+    next();
   });
-});
+}
+
+// Loads a client row and enforces that an AGENT only touches their own clients.
+async function getClientForStaff(auth, clientId) {
+  const row = await dbGet(`SELECT * FROM clients WHERE id = ?`, [clientId]);
+  if (!row) throw new HttpError(404, 'Client not found.');
+  if (auth.kind === 'AGENT' && row.agent_id !== auth.id) throw new HttpError(403, 'This client is not assigned to you.');
+  return row;
+}
+
+// ============================================================================
+// WEBSOCKET AUDIENCES
+// ----------------------------------------------------------------------------
+// Public: MARKET_TICK (quotes only). Everything account-related is private:
+//   - to the owning client's sockets
+//   - to staff sockets (admins see all, an agent only sees their own clients)
+// A socket identifies itself with {action:'AUTH', token}.
+// ============================================================================
+function sendJson(ws, payload) {
+  if (ws.readyState === WebSocket.OPEN) {
+    try {
+      ws.send(typeof payload === 'string' ? payload : JSON.stringify(payload));
+    } catch (e) {
+      /* socket closing */
+    }
+  }
+}
+function emitToClient(clientId, payload) {
+  const text = JSON.stringify(payload);
+  wss.clients.forEach((ws) => {
+    if (ws.ctx && ws.ctx.kind === 'CLIENT' && ws.ctx.id === clientId) sendJson(ws, text);
+  });
+}
+// agentId === null  -> every staff socket; otherwise admins + that agent only
+function emitToStaff(payload, agentId = null) {
+  const text = JSON.stringify(payload);
+  wss.clients.forEach((ws) => {
+    if (!ws.ctx || ws.ctx.kind === 'CLIENT') return;
+    if (ws.ctx.kind === 'ADMIN' || agentId === null || ws.ctx.id === agentId) sendJson(ws, text);
+  });
+}
+function closeSockets(predicate, code, reason) {
+  wss.clients.forEach((ws) => {
+    if (ws.ctx && predicate(ws.ctx)) {
+      try {
+        ws.close(code, reason);
+      } catch (e) {
+        /* noop */
+      }
+    }
+  });
+}
+
+function logClientActivity(clientId, actionType, details = {}) {
+  const numericId = parseClientId(clientId);
+  if (!numericId) return;
+  dbRun(`INSERT INTO client_logs (client_id, action_type, details) VALUES (?, ?, ?)`, [numericId, actionType, JSON.stringify(details)]).catch((err) =>
+    console.error('Activity Log Error:', err.message),
+  );
+}
+
 // ============================================================================
 // LIVE MARKET DATA FEED (replaces the old random-walk simulator)
 // ----------------------------------------------------------------------------
@@ -1104,10 +1128,10 @@ startBinanceFeed();
 startAlpacaFeed();
 startTwelveDataFeed();
 
-// ---- Trading engine (marks positions to the live bid/ask) -------------------
-let activePositions = [];
-let nextPositionId = 1;
 
+// ============================================================================
+// ACCOUNTS, POSITIONS & LIVE EQUITY
+// ============================================================================
 const contractMultiplier = (symbol) => (INSTRUMENTS[symbol] && INSTRUMENTS[symbol].category === 'Forex' ? 100000 : 100);
 
 // Convert a P&L expressed in the pair's quote currency into USD using live rates.
@@ -1127,8 +1151,938 @@ function markToMarket(pos) {
   const conv = quoteToUsd(pos.symbol);
   if (!q || conv === null) return;
   // Longs are valued at the price they could be sold at (bid), shorts at the price to buy back (ask).
-  const delta = pos.side === 'BUY' ? q.bid - pos.openPrice : pos.openPrice - q.ask;
-  pos.pnl = parseFloat((delta * pos.volume * contractMultiplier(pos.symbol) * conv).toFixed(2));
+  const closePrice = pos.side === 'BUY' ? q.bid : q.ask;
+  const delta = pos.side === 'BUY' ? closePrice - pos.openPrice : pos.openPrice - closePrice;
+  pos.currentPrice = closePrice;
+  pos.pnl = round2(delta * pos.volume * contractMultiplier(pos.symbol) * conv);
+}
+
+// Shape the dashboard and CRM both consume.
+const publicPosition = (p) => ({
+  id: p.id,
+  clientId: p.clientId,
+  symbol: p.symbol,
+  type: p.side, // dashboard field name
+  side: p.side,
+  volume: p.volume,
+  leverage: p.leverage,
+  openPrice: p.openPrice,
+  currentPrice: p.currentPrice,
+  margin: round2(p.margin),
+  sl: p.sl,
+  tp: p.tp,
+  pnl: p.pnl,
+  live: true,
+  openedAt: p.openedAt,
+});
+
+function summarize(clientId, balance, bonus) {
+  const positions = openPositions.filter((p) => p.clientId === clientId);
+  positions.forEach(markToMarket);
+  const floatingPnl = round2(positions.reduce((s, p) => s + (Number.isFinite(p.pnl) ? p.pnl : 0), 0));
+  const marginUsed = round2(positions.reduce((s, p) => s + (p.margin || 0), 0));
+  const bal = round2(balance);
+  const equity = round2(bal + floatingPnl);
+  return {
+    clientId,
+    balance: bal,
+    bonus: round2(bonus),
+    floatingPnl,
+    equity,
+    marginUsed,
+    freeMargin: round2(equity - marginUsed),
+    marginLevel: marginUsed > 0 ? round2((equity / marginUsed) * 100) : null,
+    openCount: positions.length,
+    positions: positions.map(publicPosition),
+  };
+}
+function accountSummary(clientId) {
+  const acc = accountCache.get(clientId);
+  return acc ? summarize(clientId, acc.balance, acc.bonus) : null;
+}
+
+// Re-read the balance row, refresh the cache and push the new numbers to the owner and to staff.
+async function refreshAccount(clientId, { notify = true } = {}) {
+  const row = await dbGet(`SELECT id, balance, bonus, agent_id FROM clients WHERE id = ?`, [clientId]);
+  if (!row) {
+    accountCache.delete(clientId);
+    return null;
+  }
+  accountCache.set(clientId, { balance: row.balance || 0, bonus: row.bonus || 0, agentId: row.agent_id });
+  if (notify) pushAccount(clientId);
+  return row;
+}
+function balancePayload(clientId) {
+  const s = accountSummary(clientId);
+  if (!s) return null;
+  return {
+    type: 'BALANCE_UPDATE',
+    clientId,
+    balance: s.balance,
+    bonus: s.bonus,
+    floatingPnl: s.floatingPnl,
+    equity: s.equity,
+    marginUsed: s.marginUsed,
+    openCount: s.openCount,
+    serverTime: Date.now(),
+  };
+}
+function positionsPayload(clientId) {
+  return { type: 'POSITIONS_UPDATE', clientId, positions: openPositions.filter((p) => p.clientId === clientId).map(publicPosition), serverTime: Date.now() };
+}
+function pushAccount(clientId) {
+  const payload = balancePayload(clientId);
+  if (!payload) return;
+  const agentId = (accountCache.get(clientId) || {}).agentId ?? null;
+  emitToClient(clientId, payload);
+  emitToStaff(payload, agentId === null ? 0 : agentId); // unassigned clients are visible to admins only
+}
+function pushPositions(clientId) {
+  const payload = positionsPayload(clientId);
+  const agentId = (accountCache.get(clientId) || {}).agentId ?? null;
+  emitToClient(clientId, payload);
+  emitToStaff(payload, agentId === null ? 0 : agentId);
+}
+
+// ---- KYC helpers ---------------------------------------------------------------
+const normKyc = (s) => {
+  const v = String(s || 'PENDING').trim().toUpperCase();
+  if (['APPROVED', 'APPROVE', 'VERIFIED'].includes(v)) return 'APPROVED';
+  if (['REJECTED', 'DECLINED', 'FAILED'].includes(v)) return 'REJECTED';
+  return 'PENDING';
+};
+// What the trader sees: unverified (nothing sent), pending (under review), verified, rejected
+const deriveKycState = (status, submittedAt, docCount) =>
+  status === 'APPROVED' ? 'verified' : status === 'REJECTED' ? 'rejected' : docCount > 0 || submittedAt ? 'pending' : 'unverified';
+
+const docExt = (d) => path.extname(String(d.stored_name || '')) || '';
+const docUrl = (d) => `/api/crm/kyc/documents/${d.id}/file/doc-${d.id}${docExt(d)}`;
+const publicDoc = (d) => ({
+  id: d.id,
+  type: d.doc_type || 'Document',
+  name: d.file_name || '',
+  mime: d.mime_type,
+  url: docUrl(d),
+  uploadedAt: d.created_at,
+});
+
+function kycFields(row, docCount) {
+  const status = normKyc(row.kyc_status);
+  return {
+    kyc_status: status,
+    kyc_state: deriveKycState(status, row.kyc_submitted_at, docCount),
+    kyc_note: row.kyc_note || '',
+    kyc_reviewed_by: row.kyc_reviewed_by || '',
+    kyc_reviewed_at: row.kyc_reviewed_at || null,
+    kyc_updated_at: row.kyc_updated_at || null,
+    kyc_submitted_at: row.kyc_submitted_at || null,
+    kyc_full_name: row.kyc_full_name || '',
+    kyc_doc_type: row.kyc_doc_type || '',
+    kyc_id_number: row.kyc_id_number || '',
+    kyc_document_count: docCount,
+  };
+}
+
+async function notifyKyc(clientId) {
+  const row = await dbGet(`SELECT * FROM clients WHERE id = ?`, [clientId]);
+  if (!row) return;
+  const n = (await dbGet(`SELECT COUNT(*) AS n FROM kyc_documents WHERE client_id = ?`, [clientId])).n;
+  const payload = { type: 'KYC_UPDATE', clientId, ...kycFields(row, n), serverTime: Date.now() };
+  emitToClient(clientId, payload);
+  emitToStaff(payload, row.agent_id === null ? 0 : row.agent_id);
+}
+const notifyStaffRefresh = (event, clientId) => emitToStaff({ type: 'CLIENT_EVENT', event, clientId, serverTime: Date.now() });
+
+// What a client is allowed to know about themselves (never the password hash)
+async function publicClient(row, token) {
+  const n = (await dbGet(`SELECT COUNT(*) AS n FROM kyc_documents WHERE client_id = ?`, [row.id])).n;
+  const out = {
+    id: row.id,
+    full_name: row.full_name,
+    email: row.email,
+    phone: row.phone,
+    balance: row.balance || 0,
+    bonus: row.bonus || 0,
+    agent_id: row.agent_id,
+    created_at: row.created_at,
+    must_change_password: !!row.must_change_password,
+    ...kycFields(row, n),
+  };
+  if (token) out.token = token;
+  return out;
+}
+
+// ============================================================================
+// TRADING ENGINE (server-authoritative: price, fill, margin and realised P&L are decided here)
+// ============================================================================
+async function openPosition(clientId, params) {
+  const symbol = String(params.symbol || '');
+  const side = String(params.side || params.type || '').toUpperCase();
+  const volume = parseFloat(params.volume);
+  if (!INSTRUMENTS[symbol]) throw new HttpError(400, 'Unknown instrument.');
+  if (side !== 'BUY' && side !== 'SELL') throw new HttpError(400, 'Order side must be BUY or SELL.');
+  if (!Number.isFinite(volume) || volume <= 0 || volume > 1000) throw new HttpError(400, 'Invalid order volume.');
+  if (!accountCache.has(clientId)) throw new HttpError(404, 'Account not found.');
+  const q = getLiveQuote(symbol);
+  if (!q) throw new HttpError(409, 'No live quote available (market closed or feed down).');
+  const conv = quoteToUsd(symbol);
+  if (conv === null) throw new HttpError(409, 'No live conversion rate for this instrument.');
+  const openPrice = side === 'BUY' ? q.ask : q.bid; // buyers lift the ask, sellers hit the bid
+  const leverage = Math.min(500, Math.max(1, parseInt(params.leverage, 10) || DEFAULT_LEVERAGE));
+  const margin = round2((openPrice * volume * contractMultiplier(symbol) * conv) / leverage);
+  if (ENFORCE_MARGIN) {
+    const s = accountSummary(clientId);
+    if (margin > s.freeMargin) throw new HttpError(409, `Insufficient free margin (required $${margin.toFixed(2)}, available $${Math.max(0, s.freeMargin).toFixed(2)}).`);
+  }
+  const sl = Math.max(0, parseFloat(params.sl) || 0);
+  const tp = Math.max(0, parseFloat(params.tp) || 0);
+  const r = await dbRun(`INSERT INTO positions (client_id, symbol, side, volume, leverage, open_price, margin, sl, tp, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'OPEN')`, [
+    clientId,
+    symbol,
+    side,
+    volume,
+    leverage,
+    openPrice,
+    margin,
+    sl,
+    tp,
+  ]);
+  const pos = { id: r.lastID, clientId, symbol, side, volume, leverage, openPrice, margin, sl, tp, openedAt: new Date().toISOString(), pnl: 0, currentPrice: null };
+  markToMarket(pos);
+  openPositions.push(pos);
+  logClientActivity(clientId, 'PLACE_ORDER', { positionId: pos.id, symbol, side, volume, openPrice });
+  pushPositions(clientId);
+  pushAccount(clientId);
+  return pos;
+}
+
+async function closePosition(clientId, positionId) {
+  const idx = openPositions.findIndex((p) => p.id === positionId && p.clientId === clientId);
+  if (idx === -1) throw new HttpError(404, 'Position not found (it may already be closed).');
+  const pos = openPositions[idx];
+  if (!getLiveQuote(pos.symbol)) throw new HttpError(409, 'Cannot close on a stale quote (market closed or feed down).');
+  markToMarket(pos);
+  const pnl = Number.isFinite(pos.pnl) ? pos.pnl : 0;
+  const closePrice = pos.currentPrice;
+  openPositions.splice(idx, 1); // removed synchronously, so a double-click can never settle twice
+  try {
+    const upd = await dbRun(`UPDATE positions SET status = 'CLOSED', close_price = ?, realized_pnl = ?, closed_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'OPEN'`, [
+      closePrice,
+      pnl,
+      pos.id,
+    ]);
+    if (upd.changes !== 1) throw new Error('position was not open in the database');
+    try {
+      await dbRun(`UPDATE clients SET balance = MAX(0, ROUND(COALESCE(balance,0) + ?, 2)) WHERE id = ?`, [pnl, clientId]);
+    } catch (balErr) {
+      await dbRun(`UPDATE positions SET status = 'OPEN', close_price = NULL, realized_pnl = NULL, closed_at = NULL WHERE id = ?`, [pos.id]).catch(() => {});
+      throw balErr;
+    }
+  } catch (err) {
+    openPositions.push(pos); // settlement failed: keep the position open rather than lose it
+    console.error('[trade] close failed:', err.message);
+    throw new HttpError(500, 'Could not close the position. Please try again.');
+  }
+  logClientActivity(clientId, 'CLOSE_POSITION', { positionId: pos.id, symbol: pos.symbol, realizedPnL: pnl });
+  const row = await refreshAccount(clientId);
+  pushPositions(clientId);
+  return { positionId: pos.id, realizedPnl: pnl, balance: row ? row.balance : null };
+}
+
+// ============================================================================
+// AUTHENTICATION ENDPOINTS
+// ============================================================================
+app.post(
+  '/api/register',
+  wrap(async (req, res) => {
+    const { fullName, email, phone, password } = req.body || {};
+    if (!fullName || !email || !phone || !password) throw new HttpError(400, 'All fields are required.');
+    const normalizedEmail = String(email).toLowerCase().trim();
+    const cleanPassword = String(password).trim();
+    const clientIp = clientIpOf(req);
+    const agent =
+      (await dbGet(`SELECT id FROM crm_agents WHERE LOWER(name) LIKE '%daniel%' ORDER BY id ASC LIMIT 1`)) ||
+      (await dbGet(`SELECT id FROM crm_agents ORDER BY id ASC LIMIT 1`));
+    let result;
+    try {
+      result = await dbRun(`INSERT INTO clients (full_name, email, phone, password, balance, ip_address, agent_id) VALUES (?, ?, ?, ?, 0, ?, ?)`, [
+        String(fullName).trim(),
+        normalizedEmail,
+        String(phone).trim(),
+        await hashPassword(cleanPassword),
+        clientIp,
+        agent ? agent.id : null,
+      ]);
+    } catch (e) {
+      if (String(e.message).includes('UNIQUE constraint failed')) throw new HttpError(400, 'Email address is already registered.');
+      throw new HttpError(500, `Registration Failed: ${e.message}`);
+    }
+    const id = result.lastID;
+    await refreshAccount(id, { notify: false });
+    logClientActivity(id, 'ACCOUNT_CREATED', { fullName, email: normalizedEmail, phone, ip_address: clientIp });
+    notifyStaffRefresh('CLIENT_CREATED', id);
+    const token = await createSession('CLIENT', id, fullName, normalizedEmail);
+    const row = await dbGet(`SELECT * FROM clients WHERE id = ?`, [id]);
+    res.json({ success: true, token, client: await publicClient(row, token) });
+  }),
+);
+
+app.post(
+  '/api/login',
+  wrap(async (req, res) => {
+    const { email, password } = req.body || {};
+    if (!email || !password) throw new HttpError(400, 'Email and password required.');
+    const cleanEmail = String(email).toLowerCase().trim();
+    if (rateLimited(`login:${clientIpOf(req)}:${cleanEmail}`, 10, 15 * 60 * 1000)) throw new HttpError(429, 'Too many attempts. Please wait a few minutes and try again.');
+    const row = await dbGet(`SELECT * FROM clients WHERE LOWER(email) = ?`, [cleanEmail]);
+    const ok = row && (await verifyPassword(String(password).trim(), row.password));
+    if (!ok) throw new HttpError(401, 'Invalid email or password.');
+    if (!isHashed(row.password)) await dbRun(`UPDATE clients SET password = ? WHERE id = ?`, [await hashPassword(String(password).trim()), row.id]);
+    logClientActivity(row.id, 'CLIENT_LOGIN', { timestamp: new Date() });
+    const token = await createSession('CLIENT', row.id, row.full_name, row.email);
+    res.json({ success: true, token, client: await publicClient(row, token) });
+  }),
+);
+
+// Client forgot their password.
+//  - default: the request is queued for CRM staff (who verify the caller and issue the temporary password)
+//  - ALLOW_SELF_SERVICE_RESET=true: email + registered phone must match, then the account is reset immediately
+app.post(
+  '/api/forgot-password',
+  wrap(async (req, res) => {
+    const { email, phone } = req.body || {};
+    if (!email) throw new HttpError(400, 'Email is required.');
+    const cleanEmail = String(email).toLowerCase().trim();
+    if (rateLimited(`forgot:${clientIpOf(req)}`, 5, 15 * 60 * 1000) || rateLimited(`forgot-acct:${cleanEmail}`, 5, 60 * 60 * 1000)) {
+      throw new HttpError(429, 'Too many requests. Please try again later.');
+    }
+    const generic = ALLOW_SELF_SERVICE_RESET
+      ? { success: true, message: `If the details match an account, its password has been reset to the temporary password ${DEFAULT_RESET_PASSWORD}. Sign in and choose a new password straight away.` }
+      : { success: true, message: 'Request received. Your account manager will reset your password and contact you shortly.' };
+    const row = await dbGet(`SELECT * FROM clients WHERE LOWER(email) = ?`, [cleanEmail]);
+    if (!row) return res.json(generic); // never reveal whether an account exists
+    const phoneMatches = digitsOnly(phone).length >= 6 && digitsOnly(phone) === digitsOnly(row.phone);
+    if (ALLOW_SELF_SERVICE_RESET) {
+      if (phoneMatches) await applyPasswordReset(row.id, DEFAULT_RESET_PASSWORD, 'SELF_SERVICE');
+      return res.json(generic);
+    }
+    const pending = await dbGet(`SELECT id FROM password_resets WHERE client_id = ? AND status = 'PENDING'`, [row.id]);
+    if (!pending) await dbRun(`INSERT INTO password_resets (client_id) VALUES (?)`, [row.id]);
+    logClientActivity(row.id, 'PASSWORD_RESET_REQUESTED', { phoneMatched: phoneMatches, ip: clientIpOf(req) });
+    notifyStaffRefresh('PASSWORD_RESET_REQUESTED', row.id);
+    res.json(generic);
+  }),
+);
+
+async function applyPasswordReset(clientId, newPassword, resolvedBy) {
+  await dbRun(`UPDATE clients SET password = ?, must_change_password = 1, password_updated_at = CURRENT_TIMESTAMP WHERE id = ?`, [await hashPassword(newPassword), clientId]);
+  await dbRun(`DELETE FROM sessions WHERE kind = 'CLIENT' AND subject_id = ?`, [clientId]); // old logins stop working
+  await dbRun(`UPDATE password_resets SET status = 'RESOLVED', resolved_at = CURRENT_TIMESTAMP, resolved_by = ? WHERE client_id = ? AND status = 'PENDING'`, [resolvedBy, clientId]);
+  closeSockets((c) => c.kind === 'CLIENT' && c.id === clientId, 4002, 'password reset');
+  logClientActivity(clientId, 'PASSWORD_RESET', { by: resolvedBy });
+  notifyStaffRefresh('PASSWORD_RESET', clientId);
+}
+
+app.post(
+  '/api/client/change-password',
+  clientAuth(),
+  wrap(async (req, res) => {
+    const { currentPassword, newPassword } = req.body || {};
+    const next = String(newPassword || '').trim();
+    if (!currentPassword || !next) throw new HttpError(400, 'Current and new password are required.');
+    if (next.length < 6) throw new HttpError(400, 'New password must be at least 6 characters.');
+    if (next === DEFAULT_RESET_PASSWORD) throw new HttpError(400, 'Please choose a password other than the temporary one.');
+    const row = await dbGet(`SELECT * FROM clients WHERE id = ?`, [req.clientId]);
+    if (!row) throw new HttpError(404, 'Client not found.');
+    if (rateLimited(`chpw:${req.clientId}`, 8, 15 * 60 * 1000)) throw new HttpError(429, 'Too many attempts. Please wait and try again.');
+    if (!(await verifyPassword(String(currentPassword).trim(), row.password))) throw new HttpError(401, 'Current password is incorrect.');
+    await dbRun(`UPDATE clients SET password = ?, must_change_password = 0, password_updated_at = CURRENT_TIMESTAMP WHERE id = ?`, [await hashPassword(next), row.id]);
+    logClientActivity(row.id, 'PASSWORD_CHANGED', {});
+    res.json({ success: true, message: 'Password updated.' });
+  }),
+);
+
+// CRM staff login (master admin from env + agents from the database)
+const handleStaffLogin = wrap(async (req, res) => {
+  const { email, password } = req.body || {};
+  if (!email || !password) throw new HttpError(400, 'Email and password are required.');
+  const cleanEmail = String(email).toLowerCase().trim();
+  const cleanPassword = String(password).trim();
+  if (rateLimited(`staff:${clientIpOf(req)}:${cleanEmail}`, 10, 15 * 60 * 1000)) throw new HttpError(429, 'Too many attempts. Please wait a few minutes and try again.');
+
+  if (cleanEmail === ADMIN_EMAIL && safeEqual(String(password), ADMIN_PASSWORD)) {
+    const token = await createSession('ADMIN', 0, 'Klaus Admin', ADMIN_EMAIL);
+    return res.json({ success: true, token, role: 'ADMIN', agent: { id: 0, name: 'Klaus Admin', email: ADMIN_EMAIL, role: 'ADMIN' } });
+  }
+  const agent = await dbGet(`SELECT * FROM crm_agents WHERE LOWER(email) = ?`, [cleanEmail]);
+  if (!agent || !(await verifyPassword(cleanPassword, agent.password))) throw new HttpError(401, 'Invalid agent credentials.');
+  if (!isHashed(agent.password)) await dbRun(`UPDATE crm_agents SET password = ? WHERE id = ?`, [await hashPassword(cleanPassword), agent.id]);
+  const token = await createSession('AGENT', agent.id, agent.name, agent.email);
+  res.json({ success: true, token, role: 'AGENT', agent: { id: agent.id, name: agent.name, email: agent.email, role: 'AGENT' } });
+});
+app.post('/api/admin/agent-login', handleStaffLogin);
+app.post('/api/crm/agent/login', handleStaffLogin);
+
+app.post(
+  '/api/auth/logout',
+  wrap(async (req, res) => {
+    const token = bearerToken(req);
+    if (token) await dbRun(`DELETE FROM sessions WHERE token_hash = ?`, [hashToken(token)]);
+    res.json({ success: true });
+  }),
+);
+
+// ============================================================================
+// CLIENT ACCOUNT ENDPOINTS
+// ============================================================================
+const handleAccount = wrap(async (req, res) => {
+  const row = await dbGet(`SELECT * FROM clients WHERE id = ?`, [req.clientId]);
+  if (!row) throw new HttpError(404, 'Client not found.');
+  const summary = accountSummary(req.clientId) || summarize(req.clientId, row.balance, row.bonus);
+  res.json({ success: true, client: await publicClient(row), summary, positions: summary.positions, serverTime: Date.now() });
+});
+app.get('/api/client/profile/:clientId', clientAuth({ allowStaff: true }), handleAccount);
+app.get('/api/client/account/:clientId', clientAuth({ allowStaff: true }), handleAccount);
+
+app.post(
+  '/api/trade/open',
+  clientAuth(),
+  wrap(async (req, res) => {
+    const pos = await openPosition(req.clientId, req.body || {});
+    const s = accountSummary(req.clientId);
+    res.json({ success: true, position: publicPosition(pos), balance: s.balance, summary: s });
+  }),
+);
+app.post(
+  '/api/trade/close',
+  clientAuth(),
+  wrap(async (req, res) => {
+    const positionId = parseInt(req.body && (req.body.positionId ?? req.body.id), 10);
+    if (!Number.isInteger(positionId)) throw new HttpError(400, 'Invalid position id.');
+    const result = await closePosition(req.clientId, positionId);
+    res.json({ success: true, ...result, summary: accountSummary(req.clientId) });
+  }),
+);
+
+// ---- KYC: client submits identity details + a document ----------------------------
+function sniffFile(buf) {
+  if (buf.length > 8 && buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47) return { mime: 'image/png', ext: '.png' };
+  if (buf.length > 3 && buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return { mime: 'image/jpeg', ext: '.jpg' };
+  if (buf.length > 5 && buf.slice(0, 5).toString('latin1') === '%PDF-') return { mime: 'application/pdf', ext: '.pdf' };
+  return null;
+}
+const cleanText = (v, max) => String(v === undefined || v === null ? '' : v).replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, max);
+
+app.post(
+  '/api/client/kyc/submit',
+  clientAuth(),
+  wrap(async (req, res) => {
+    const clientId = req.clientId;
+    const row = await dbGet(`SELECT * FROM clients WHERE id = ?`, [clientId]);
+    if (!row) throw new HttpError(404, 'Client not found.');
+    if (normKyc(row.kyc_status) === 'APPROVED') throw new HttpError(409, 'Your identity is already verified.');
+    const body = req.body || {};
+    const fullName = cleanText(body.fullName, 120);
+    const documentType = cleanText(body.documentType, 40) || 'Document';
+    const idNumber = cleanText(body.idNumber, 60);
+    if (!fullName || !idNumber) throw new HttpError(400, 'Full name and document number are required.');
+    const b64 = String(body.dataBase64 || body.file || '').replace(/^data:[^;]+;base64,/, '');
+    if (!b64) throw new HttpError(400, 'Please attach a document image or PDF.');
+    const buf = Buffer.from(b64, 'base64');
+    if (!buf.length) throw new HttpError(400, 'The uploaded file is empty.');
+    if (buf.length > MAX_KYC_BYTES) throw new HttpError(413, 'File is too large. Maximum size is 10MB.');
+    const kind = sniffFile(buf);
+    if (!kind) throw new HttpError(400, 'Unsupported file type. Please upload a PNG, JPG or PDF.');
+    const count = (await dbGet(`SELECT COUNT(*) AS n FROM kyc_documents WHERE client_id = ?`, [clientId])).n;
+    if (count >= MAX_KYC_DOCS_PER_CLIENT) throw new HttpError(400, 'Document limit reached. Please contact support.');
+
+    const storedName = `${clientId}-${Date.now()}-${crypto.randomBytes(6).toString('hex')}${kind.ext}`;
+    await fs.promises.mkdir(UPLOAD_DIR, { recursive: true });
+    await fs.promises.writeFile(path.join(UPLOAD_DIR, storedName), buf, { mode: 0o640 });
+    try {
+      await dbRun(`INSERT INTO kyc_documents (client_id, doc_type, file_name, mime_type, size, stored_name) VALUES (?, ?, ?, ?, ?, ?)`, [
+        clientId,
+        documentType,
+        cleanText(body.fileName, 160) || `document${kind.ext}`,
+        kind.mime,
+        buf.length,
+        storedName,
+      ]);
+      // A new submission always goes (back) to PENDING for staff review; it can never produce APPROVED.
+      await dbRun(
+        `UPDATE clients SET kyc_status = 'PENDING', kyc_note = '', kyc_full_name = ?, kyc_doc_type = ?, kyc_id_number = ?,
+           kyc_submitted_at = CURRENT_TIMESTAMP, kyc_updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+        [fullName, documentType, idNumber, clientId],
+      );
+    } catch (e) {
+      await fs.promises.unlink(path.join(UPLOAD_DIR, storedName)).catch(() => {});
+      throw e;
+    }
+    logClientActivity(clientId, 'KYC_SUBMITTED', { documentType, mime: kind.mime, bytes: buf.length });
+    await notifyKyc(clientId);
+    notifyStaffRefresh('DOCUMENT_UPLOADED', clientId);
+    const fresh = await dbGet(`SELECT * FROM clients WHERE id = ?`, [clientId]);
+    res.json({ success: true, message: 'Documents received. Awaiting compliance review.', client: await publicClient(fresh) });
+  }),
+);
+
+app.post(
+  '/api/cashier/deposit',
+  clientAuth(),
+  wrap(async (req, res) => {
+    const { amount, method, txHash, type } = req.body || {};
+    const transactionType = String(type || 'DEPOSIT').toUpperCase();
+    const amt = parseFloat(amount);
+    if (!['DEPOSIT', 'WITHDRAWAL'].includes(transactionType) || !Number.isFinite(amt) || amt <= 0) throw new HttpError(400, 'Invalid transaction parameters.');
+    const r = await dbRun(`INSERT INTO transactions (client_id, type, amount, status, method, tx_hash) VALUES (?, ?, ?, 'PENDING', ?, ?)`, [
+      req.clientId,
+      transactionType,
+      amt,
+      cleanText(method, 60) || 'Crypto',
+      cleanText(txHash, 200) || 'N/A',
+    ]);
+    logClientActivity(req.clientId, `${transactionType}_REQUESTED`, { amount: amt, method, txHash });
+    notifyStaffRefresh('TRANSACTION_REQUESTED', req.clientId);
+    res.json({ success: true, message: 'Request submitted for CRM approval.', transactionId: r.lastID });
+  }),
+);
+
+// ============================================================================
+// CRM / ADMIN ENDPOINTS  (every one requires a staff session; agents are scoped to their own clients)
+// ============================================================================
+const agentScopeSql = (auth, alias = 'c') => (auth.kind === 'AGENT' ? { where: `WHERE ${alias}.agent_id = ?`, params: [auth.id] } : { where: '', params: [] });
+
+app.get(
+  '/api/admin/clients-detailed',
+  staffAuth(),
+  wrap(async (req, res) => {
+    const scope = agentScopeSql(req.auth);
+    const rows = await dbAll(
+      `SELECT c.id, c.full_name, c.email, c.phone, c.balance, c.bonus, c.ip_address, c.created_at, c.agent_id,
+              c.kyc_status, c.kyc_updated_at, c.kyc_note, c.kyc_reviewed_by, c.kyc_reviewed_at,
+              c.kyc_full_name, c.kyc_doc_type, c.kyc_id_number, c.kyc_submitted_at, c.must_change_password,
+              COALESCE(a.name, 'Unassigned') AS agent_name,
+              (SELECT COUNT(*) FROM password_resets r WHERE r.client_id = c.id AND r.status = 'PENDING') AS reset_requests
+       FROM clients c LEFT JOIN crm_agents a ON c.agent_id = a.id ${scope.where} ORDER BY c.id DESC`,
+      scope.params,
+    );
+    const docsByClient = new Map();
+    (await dbAll(`SELECT id, client_id, doc_type, file_name, mime_type, stored_name, created_at FROM kyc_documents ORDER BY id`)).forEach((d) => {
+      if (!docsByClient.has(d.client_id)) docsByClient.set(d.client_id, []);
+      docsByClient.get(d.client_id).push(d);
+    });
+    const clients = rows.map((c) => {
+      const docs = docsByClient.get(c.id) || [];
+      const s = summarize(c.id, c.balance, c.bonus);
+      return {
+        id: c.id,
+        full_name: c.full_name,
+        email: c.email,
+        phone: c.phone,
+        ip_address: c.ip_address,
+        created_at: c.created_at,
+        agent_id: c.agent_id,
+        agent_name: c.agent_name,
+        balance: s.balance,
+        bonus: s.bonus,
+        floating_pnl: s.floatingPnl,
+        equity: s.equity,
+        margin_used: s.marginUsed,
+        open_positions: s.openCount,
+        must_change_password: !!c.must_change_password,
+        reset_requested: c.reset_requests > 0,
+        ...kycFields(c, docs.length),
+        kyc_documents: docs.map(publicDoc),
+      };
+    });
+    res.json({ success: true, serverTime: Date.now(), clients });
+  }),
+);
+
+// Every client's balance, floating P&L, equity and open positions in one call
+app.get(
+  '/api/admin/portfolios',
+  staffAuth(),
+  wrap(async (req, res) => {
+    const scope = agentScopeSql(req.auth);
+    const rows = await dbAll(
+      `SELECT c.id, c.full_name, c.email, c.balance, c.bonus, c.agent_id, COALESCE(a.name, 'Unassigned') AS agent_name
+       FROM clients c LEFT JOIN crm_agents a ON c.agent_id = a.id ${scope.where} ORDER BY c.id DESC`,
+      scope.params,
+    );
+    const accounts = rows.map((r) => ({ ...summarize(r.id, r.balance, r.bonus), name: r.full_name, email: r.email, agentId: r.agent_id, agentName: r.agent_name }));
+    const totals = accounts.reduce(
+      (t, a) => ({
+        balance: round2(t.balance + a.balance),
+        bonus: round2(t.bonus + a.bonus),
+        floatingPnl: round2(t.floatingPnl + a.floatingPnl),
+        equity: round2(t.equity + a.equity),
+        marginUsed: round2(t.marginUsed + a.marginUsed),
+        openPositions: t.openPositions + a.openCount,
+      }),
+      { balance: 0, bonus: 0, floatingPnl: 0, equity: 0, marginUsed: 0, openPositions: 0 },
+    );
+    res.json({ success: true, serverTime: Date.now(), accounts, totals });
+  }),
+);
+
+app.get(
+  '/api/crm/agents',
+  staffAuth(),
+  wrap(async (req, res) => {
+    res.json({ agents: await dbAll(`SELECT id, name, email, role FROM crm_agents ORDER BY id`) });
+  }),
+);
+
+app.post(
+  '/api/admin/assign-agent',
+  staffAuth(['ADMIN']),
+  wrap(async (req, res) => {
+    const { clientId, assignedAgent, agentId } = req.body || {};
+    const id = parseClientId(clientId);
+    if (!id) throw new HttpError(400, 'Invalid Client ID provided.');
+    const client = await dbGet(`SELECT id FROM clients WHERE id = ?`, [id]);
+    if (!client) throw new HttpError(404, 'Client not found.');
+    if (assignedAgent === 'Unassigned' || assignedAgent === null) {
+      await dbRun(`UPDATE clients SET agent_id = NULL WHERE id = ?`, [id]);
+      await refreshAccount(id, { notify: false });
+      logClientActivity(id, 'AGENT_UNASSIGNED', { by: req.auth.name });
+      notifyStaffRefresh('AGENT_CHANGED', id);
+      return res.json({ success: true, message: 'Client unassigned successfully.' });
+    }
+    let agent = null;
+    if (agentId) agent = await dbGet(`SELECT id FROM crm_agents WHERE id = ?`, [agentId]);
+    else {
+      const name = String(assignedAgent || '').trim();
+      agent = await dbGet(`SELECT id FROM crm_agents WHERE LOWER(TRIM(name)) = LOWER(?)`, [name]);
+      if (!agent && name) {
+        const fuzzy = await dbAll(`SELECT id FROM crm_agents WHERE LOWER(name) LIKE LOWER(?)`, [`%${name}%`]);
+        if (fuzzy.length === 1) agent = fuzzy[0]; // only when it is unambiguous
+      }
+    }
+    if (!agent) throw new HttpError(404, 'Agent not found in database.');
+    await dbRun(`UPDATE clients SET agent_id = ? WHERE id = ?`, [agent.id, id]);
+    await refreshAccount(id, { notify: false });
+    logClientActivity(id, 'AGENT_ASSIGNED', { agentId: agent.id, assignedAgent, by: req.auth.name });
+    notifyStaffRefresh('AGENT_CHANGED', id);
+    res.json({ success: true, message: 'Agent assigned successfully.' });
+  }),
+);
+
+app.post(
+  '/api/admin/create-agent',
+  staffAuth(['ADMIN']),
+  wrap(async (req, res) => {
+    const { name, email, password } = req.body || {};
+    if (!name || !email || !password) throw new HttpError(400, 'Agent name, email, and password are required.');
+    const cleanEmail = String(email).toLowerCase().trim();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) throw new HttpError(400, 'Please enter a valid agent email.');
+    if (cleanEmail === ADMIN_EMAIL) throw new HttpError(400, 'Agent email already exists.');
+    let r;
+    try {
+      r = await dbRun(`INSERT INTO crm_agents (name, email, password, role) VALUES (?, ?, ?, 'AGENT')`, [String(name).trim(), cleanEmail, await hashPassword(String(password).trim())]);
+    } catch (e) {
+      if (String(e.message).includes('UNIQUE constraint failed')) throw new HttpError(400, 'Agent email already exists.');
+      throw new HttpError(500, 'Failed to create agent.');
+    }
+    const agents = await dbAll(`SELECT id, name, email, role FROM crm_agents ORDER BY id`);
+    res.json({ success: true, agent: { id: r.lastID, name: String(name).trim(), email: cleanEmail, role: 'AGENT' }, agents });
+  }),
+);
+
+// ---- Permanent deletion ----------------------------------------------------------
+async function deleteClientCascade(clientId, actor) {
+  const client = await dbGet(`SELECT id FROM clients WHERE id = ?`, [clientId]);
+  if (!client) throw new HttpError(404, 'Client not found.');
+  const files = await dbAll(`SELECT stored_name FROM kyc_documents WHERE client_id = ?`, [clientId]);
+  openPositions = openPositions.filter((p) => p.clientId !== clientId); // stop marking their positions immediately
+  // Children first (explicit, so cleanup never depends on foreign_keys being enabled for an old schema)
+  for (const table of ['kyc_documents', 'positions', 'transactions', 'client_logs', 'password_resets']) {
+    await dbRun(`DELETE FROM ${table} WHERE client_id = ?`, [clientId]);
+  }
+  await dbRun(`DELETE FROM sessions WHERE kind = 'CLIENT' AND subject_id = ?`, [clientId]);
+  const del = await dbRun(`DELETE FROM clients WHERE id = ?`, [clientId]);
+  if (del.changes !== 1) throw new HttpError(500, 'Failed to delete client.');
+  await Promise.all(files.map((f) => fs.promises.unlink(path.join(UPLOAD_DIR, path.basename(f.stored_name))).catch(() => {})));
+  accountCache.delete(clientId);
+  await dbRun(`INSERT INTO deleted_accounts_log (kind, subject_id, deleted_by) VALUES ('CLIENT', ?, ?)`, [clientId, actor]);
+  emitToClient(clientId, { type: 'ACCOUNT_DELETED', clientId });
+  closeSockets((c) => c.kind === 'CLIENT' && c.id === clientId, 4001, 'account deleted');
+  notifyStaffRefresh('CLIENT_DELETED', clientId);
+}
+app.delete(
+  '/api/admin/clients/:clientId',
+  staffAuth(['ADMIN']),
+  wrap(async (req, res) => {
+    const id = parseClientId(req.params.clientId);
+    if (!id) throw new HttpError(400, 'Invalid client ID.');
+    await deleteClientCascade(id, req.auth.name);
+    res.json({ success: true, message: 'Client and all related data permanently deleted.' });
+  }),
+);
+app.post(
+  '/api/admin/delete-client',
+  staffAuth(['ADMIN']),
+  wrap(async (req, res) => {
+    const id = parseClientId(req.body && req.body.clientId);
+    if (!id) throw new HttpError(400, 'Invalid client ID.');
+    await deleteClientCascade(id, req.auth.name);
+    res.json({ success: true, message: 'Client and all related data permanently deleted.' });
+  }),
+);
+
+async function deleteAgentCascade(agentId, actor) {
+  const agent = await dbGet(`SELECT id FROM crm_agents WHERE id = ?`, [agentId]);
+  if (!agent) throw new HttpError(404, 'Agent not found.');
+  const n = (await dbGet(`SELECT COUNT(*) AS n FROM clients WHERE agent_id = ?`, [agentId])).n;
+  await dbRun(`UPDATE clients SET agent_id = NULL WHERE agent_id = ?`, [agentId]); // clients are kept, just unassigned
+  await dbRun(`DELETE FROM sessions WHERE kind = 'AGENT' AND subject_id = ?`, [agentId]);
+  const del = await dbRun(`DELETE FROM crm_agents WHERE id = ?`, [agentId]);
+  if (del.changes !== 1) throw new HttpError(500, 'Failed to delete agent.');
+  accountCache.forEach((acc) => {
+    if (acc.agentId === agentId) acc.agentId = null;
+  });
+  await dbRun(`INSERT INTO deleted_accounts_log (kind, subject_id, deleted_by) VALUES ('AGENT', ?, ?)`, [agentId, actor]);
+  closeSockets((c) => c.kind === 'AGENT' && c.id === agentId, 4001, 'account deleted');
+  notifyStaffRefresh('AGENT_DELETED', 0);
+  return n;
+}
+app.delete(
+  '/api/admin/agents/:agentId',
+  staffAuth(['ADMIN']),
+  wrap(async (req, res) => {
+    const id = parseInt(req.params.agentId, 10);
+    if (!Number.isInteger(id)) throw new HttpError(400, 'Invalid agent ID.');
+    const unassigned = await deleteAgentCascade(id, req.auth.name);
+    res.json({ success: true, unassignedClients: unassigned, agents: await dbAll(`SELECT id, name, email, role FROM crm_agents ORDER BY id`) });
+  }),
+);
+app.post(
+  '/api/admin/delete-agent',
+  staffAuth(['ADMIN']),
+  wrap(async (req, res) => {
+    const id = parseInt(req.body && req.body.agentId, 10);
+    if (!Number.isInteger(id)) throw new HttpError(400, 'Invalid agent ID.');
+    const unassigned = await deleteAgentCascade(id, req.auth.name);
+    res.json({ success: true, unassignedClients: unassigned, agents: await dbAll(`SELECT id, name, email, role FROM crm_agents ORDER BY id`) });
+  }),
+);
+
+// ---- Password reset (staff side) ----------------------------------------------------
+app.post(
+  '/api/admin/reset-client-password',
+  staffAuth(),
+  wrap(async (req, res) => {
+    const id = parseClientId(req.body && req.body.clientId);
+    if (!id) throw new HttpError(400, 'Invalid client ID.');
+    await getClientForStaff(req.auth, id); // agents may only reset their own clients
+    const custom = req.body.newPassword ? String(req.body.newPassword).trim() : '';
+    if (custom && custom.length < 6) throw new HttpError(400, 'Password must be at least 6 characters.');
+    const temp = custom || DEFAULT_RESET_PASSWORD;
+    await applyPasswordReset(id, temp, req.auth.name);
+    res.json({ success: true, temporaryPassword: temp, message: 'Password reset. The client must choose a new password at next login.' });
+  }),
+);
+app.get(
+  '/api/admin/password-resets',
+  staffAuth(),
+  wrap(async (req, res) => {
+    const scope = agentScopeSql(req.auth);
+    const rows = await dbAll(
+      `SELECT r.id, r.client_id, r.requested_at, c.full_name, c.email FROM password_resets r JOIN clients c ON c.id = r.client_id
+       ${scope.where} ${scope.where ? 'AND' : 'WHERE'} r.status = 'PENDING' ORDER BY r.id DESC`,
+      scope.params,
+    );
+    res.json({ success: true, requests: rows });
+  }),
+);
+
+// ---- Transactions -----------------------------------------------------------------
+app.get(
+  '/api/admin/pending-transactions',
+  staffAuth(['ADMIN']),
+  wrap(async (req, res) => {
+    const rows = await dbAll(
+      `SELECT t.id, t.client_id, t.type, t.amount, t.method, t.tx_hash, t.status, t.created_at, c.full_name, c.email
+       FROM transactions t JOIN clients c ON t.client_id = c.id WHERE t.status = 'PENDING' ORDER BY t.id DESC`,
+    );
+    res.json({ transactions: rows });
+  }),
+);
+app.post(
+  '/api/admin/approve-transaction',
+  staffAuth(['ADMIN']),
+  wrap(async (req, res) => {
+    const { transactionId, status } = req.body || {};
+    if (!transactionId || !['APPROVED', 'REJECTED'].includes(status)) throw new HttpError(400, 'Invalid transaction approval parameters.');
+    const tx = await dbGet(`SELECT * FROM transactions WHERE id = ?`, [transactionId]);
+    if (!tx) throw new HttpError(404, 'Transaction not found.');
+    const upd = await dbRun(`UPDATE transactions SET status = ? WHERE id = ? AND status = 'PENDING'`, [status, transactionId]);
+    if (upd.changes !== 1) throw new HttpError(400, 'Transaction already processed.');
+    if (status === 'APPROVED') {
+      const delta = tx.type === 'WITHDRAWAL' ? -Math.abs(tx.amount) : Math.abs(tx.amount);
+      await dbRun(`UPDATE clients SET balance = MAX(0, ROUND(COALESCE(balance,0) + ?, 2)) WHERE id = ?`, [delta, tx.client_id]);
+      await refreshAccount(tx.client_id);
+    }
+    logClientActivity(tx.client_id, `TRANSACTION_${status}`, { transactionId, amount: tx.amount, type: tx.type, by: req.auth.name });
+    res.json({ success: true, message: `Transaction ${status.toLowerCase()} successfully.` });
+  }),
+);
+
+// ---- Manual balance / bonus adjustment (admin only) --------------------------------
+const handleBalanceAdjustment = wrap(async (req, res) => {
+  const body = req.body || {};
+  const clientId = parseClientId(body.clientId);
+  const amount = parseFloat(body.amount);
+  const rawType = String(body.type || body.adjustmentType || '').trim().toUpperCase();
+  const KINDS = { ADD: 'CREDIT', CREDIT: 'CREDIT', MINUS: 'DEBIT', DEDUCT: 'DEBIT', DEBIT: 'DEBIT', BONUS: 'BONUS' };
+  const kind = KINDS[rawType];
+  if (!clientId || !Number.isFinite(amount) || amount <= 0) throw new HttpError(400, 'Invalid client ID or amount.');
+  if (!kind) throw new HttpError(400, 'Invalid adjustment type. Use ADD, MINUS or BONUS.');
+  const client = await dbGet(`SELECT id, balance, bonus FROM clients WHERE id = ?`, [clientId]);
+  if (!client) throw new HttpError(404, 'Client not found.');
+  let applied = amount;
+  if (kind === 'BONUS') {
+    await dbRun(`UPDATE clients SET bonus = ROUND(COALESCE(bonus,0) + ?, 2) WHERE id = ?`, [amount, clientId]);
+    await dbRun(`INSERT INTO transactions (client_id, type, amount, status, method) VALUES (?, 'BONUS', ?, 'APPROVED', 'ADMIN_BONUS')`, [clientId, amount]);
+    logClientActivity(clientId, 'ADMIN_BONUS_ADDED', { amount, by: req.auth.name });
+  } else {
+    const current = client.balance || 0;
+    applied = kind === 'DEBIT' ? Math.min(amount, current) : amount;
+    if (applied <= 0) throw new HttpError(400, 'This client has no balance to deduct.');
+    const delta = kind === 'DEBIT' ? -applied : applied;
+    await dbRun(`UPDATE clients SET balance = MAX(0, ROUND(COALESCE(balance,0) + ?, 2)) WHERE id = ?`, [delta, clientId]);
+    await dbRun(`INSERT INTO transactions (client_id, type, amount, status, method) VALUES (?, ?, ?, 'APPROVED', 'ADMIN_ADJUSTMENT')`, [clientId, kind, applied]);
+    logClientActivity(clientId, 'ADMIN_BALANCE_ADJUSTMENT', { amount: delta, type: rawType, by: req.auth.name });
+  }
+  const row = await refreshAccount(clientId); // pushes BALANCE_UPDATE to the client and to staff instantly
+  const s = accountSummary(clientId);
+  res.json({
+    success: true,
+    message: kind === 'BONUS' ? 'Bonus updated successfully.' : 'Client balance updated successfully.',
+    applied: round2(applied),
+    balance: row.balance,
+    bonus: row.bonus,
+    equity: s ? s.equity : row.balance,
+  });
+});
+app.post('/api/admin/update-balance', staffAuth(['ADMIN']), handleBalanceAdjustment);
+app.post('/api/admin/adjust-balance', staffAuth(['ADMIN']), handleBalanceAdjustment);
+
+// ---- KYC review (admin, or the client's own agent) ------------------------------------
+const KYC_WORDS = {
+  APPROVED: ['APPROVED', 'APPROVE', 'VERIFIED', 'VERIFY', 'ACCEPTED', 'ACCEPT', 'TRUE'],
+  REJECTED: ['REJECTED', 'REJECT', 'DECLINED', 'DECLINE', 'DENIED', 'DENY', 'FALSE'],
+  PENDING: ['PENDING', 'RESET', 'UNVERIFIED'],
+};
+const parseKycDecision = (body) => {
+  const raw = body.kycStatus ?? body.kyc_status ?? body.status ?? body.decision ?? body.action ?? body.approved;
+  if (raw === true) return 'APPROVED';
+  if (raw === false) return 'REJECTED';
+  const v = String(raw === undefined || raw === null ? '' : raw).trim().toUpperCase();
+  return Object.keys(KYC_WORDS).find((k) => KYC_WORDS[k].includes(v)) || null;
+};
+
+const handleKycReview = wrap(async (req, res) => {
+  const body = req.body || {};
+  const clientId = parseClientId(body.clientId ?? body.client_id ?? body.id ?? body.userId ?? req.params.clientId);
+  const status = parseKycDecision(body);
+  if (!clientId) throw new HttpError(400, 'Invalid client ID.');
+  if (!status) throw new HttpError(400, 'Invalid KYC status. Use APPROVED, REJECTED or PENDING.');
+  await getClientForStaff(req.auth, clientId);
+  const note = status === 'REJECTED' ? cleanText(body.note ?? body.reason, 1000) : '';
+  await dbRun(
+    `UPDATE clients SET kyc_status = ?, kyc_note = ?, kyc_reviewed_by = ?, kyc_reviewed_at = CURRENT_TIMESTAMP, kyc_updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+    [status, note, req.auth.name, clientId],
+  );
+  logClientActivity(clientId, `KYC_${status}`, { kycStatus: status, note: note || null, by: req.auth.name });
+  await notifyKyc(clientId); // the client's dashboard and every open CRM update immediately
+  const row = await dbGet(`SELECT * FROM clients WHERE id = ?`, [clientId]);
+  const n = (await dbGet(`SELECT COUNT(*) AS n FROM kyc_documents WHERE client_id = ?`, [clientId])).n;
+  res.status(200).json({
+    success: true,
+    confirmed: true,
+    clientId,
+    kycStatus: status,
+    status,
+    message: `KYC ${status.toLowerCase()} successfully.`,
+    ...kycFields(row, n),
+  });
+});
+[
+  '/api/crm/kyc/review',
+  '/api/admin/kyc-status',
+  '/api/admin/update-kyc',
+  '/api/admin/approve-kyc',
+  '/api/admin/kyc',
+  '/api/crm/kyc-status',
+  '/api/crm/kyc',
+  '/api/crm/client/:clientId/kyc',
+].forEach((route) => {
+  app.post(route, staffAuth(), handleKycReview);
+  app.put(route, staffAuth(), handleKycReview);
+  app.patch(route, staffAuth(), handleKycReview);
+});
+
+app.get(
+  '/api/crm/client/:clientId/kyc',
+  staffAuth(),
+  wrap(async (req, res) => {
+    const id = parseClientId(req.params.clientId);
+    if (!id) throw new HttpError(400, 'Invalid client ID.');
+    const row = await getClientForStaff(req.auth, id);
+    const docs = await dbAll(`SELECT id, client_id, doc_type, file_name, mime_type, stored_name, created_at FROM kyc_documents WHERE client_id = ? ORDER BY id`, [id]);
+    res.json({ success: true, clientId: id, ...kycFields(row, docs.length), kyc_documents: docs.map(publicDoc) });
+  }),
+);
+
+// Streams an uploaded document. Staff only; the token may ride in ?token= so <img>/<a> tags can load it.
+app.get(
+  '/api/crm/kyc/documents/:docId/file/:name?',
+  staffAuth(['ADMIN', 'AGENT'], { queryToken: true }),
+  wrap(async (req, res) => {
+    const docId = parseInt(req.params.docId, 10);
+    const doc = Number.isInteger(docId) ? await dbGet(`SELECT * FROM kyc_documents WHERE id = ?`, [docId]) : null;
+    if (!doc) throw new HttpError(404, 'Document not found.');
+    await getClientForStaff(req.auth, doc.client_id);
+    res.setHeader('Content-Type', doc.mime_type);
+    res.setHeader('Content-Disposition', `inline; filename="doc-${doc.id}${docExt(doc)}"`);
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.sendFile(path.join(UPLOAD_DIR, path.basename(doc.stored_name)), (err) => {
+      if (err && !res.headersSent) res.status(404).json({ success: false, error: 'Document file is missing on the server.' });
+    });
+  }),
+);
+
+app.get(
+  '/api/crm/client/:clientId/activity',
+  staffAuth(),
+  wrap(async (req, res) => {
+    const id = parseClientId(req.params.clientId);
+    if (!id) throw new HttpError(400, 'Invalid client ID.');
+    await getClientForStaff(req.auth, id);
+    const rows = await dbAll(`SELECT * FROM client_logs WHERE client_id = ? ORDER BY id DESC LIMIT 50`, [id]);
+    res.json({
+      logs: rows.map((r) => {
+        let details = {};
+        try {
+          details = JSON.parse(r.details || '{}');
+        } catch (e) {
+          /* keep {} */
+        }
+        return { ...r, details };
+      }),
+    });
+  }),
+);
+
+// ============================================================================
+// LIVE BROADCAST LOOP
+// ============================================================================
+function broadcast(payload) {
+  const text = JSON.stringify(payload);
+  wss.clients.forEach((client) => sendJson(client, text));
 }
 
 const feedSummary = () => ({
@@ -1139,17 +2093,26 @@ const feedSummary = () => ({
   instruments: Object.keys(INSTRUMENTS).length,
 });
 
-function broadcast(payload) {
-  const text = JSON.stringify(payload);
-  wss.clients.forEach((client) => {
-    if (client.readyState === WebSocket.OPEN) client.send(text);
-  });
+// Accounts that currently hold positions (these are the only ones whose equity moves with the market)
+function accountsWithPositions() {
+  const ids = [...new Set(openPositions.map((p) => p.clientId))];
+  return ids
+    .map((id) => {
+      const acc = accountCache.get(id);
+      return acc ? { ...summarize(id, acc.balance, acc.bonus), agentId: acc.agentId } : null;
+    })
+    .filter(Boolean);
+}
+function portfolioPayloadFor(ctx, accounts) {
+  const list = ctx.kind === 'ADMIN' ? accounts : accounts.filter((a) => a.agentId === ctx.id);
+  return { type: 'PORTFOLIO_TICK', accounts: list, serverTime: Date.now() };
 }
 
 let lastTickSent = 0;
 setInterval(() => {
   refreshStaleness();
   const now = Date.now();
+  const hasPositions = openPositions.length > 0;
   if (dirtySymbols.size === 0 && now - lastTickSent < 2000) return; // idle: only a 2s keep-alive
   const prices = {};
   dirtySymbols.forEach((symbol) => {
@@ -1157,12 +2120,15 @@ setInterval(() => {
     if (q) prices[symbol] = serializeQuote(symbol, q);
   });
   dirtySymbols.clear();
-  activePositions.forEach(markToMarket);
   lastTickSent = now;
-  broadcast({
-    type: 'MARKET_TICK',
-    data: { prices, full: false, positions: activePositions, feeds: feedSummary(), serverTime: now },
-  });
+  // Quotes are public. No account data is ever included here.
+  broadcast({ type: 'MARKET_TICK', data: { prices, full: false, feeds: feedSummary(), serverTime: now } });
+  if (hasPositions) {
+    const accounts = accountsWithPositions();
+    wss.clients.forEach((ws) => {
+      if (ws.ctx && ws.ctx.kind !== 'CLIENT') sendJson(ws, portfolioPayloadFor(ws.ctx, accounts));
+    });
+  }
 }, QUOTE_CONFIG.broadcastMs);
 
 // Public HTTP snapshot (used by the dashboard as a fallback when the socket is down)
@@ -1171,68 +2137,57 @@ app.get('/api/quotes', (req, res) => {
   res.json({ success: true, serverTime: Date.now(), feeds: feedSummary(), quotes: snapshotQuotes() });
 });
 
+// ---- WebSocket ---------------------------------------------------------------------
+async function handleWsAuth(ws, msg) {
+  let ctx = null;
+  if (msg.token) {
+    const s = await lookupSession(String(msg.token));
+    if (s) ctx = { kind: s.kind, id: s.id };
+  } else if (!REQUIRE_CLIENT_TOKEN) {
+    const id = parseClientId(msg.clientId); // legacy: id only (clients only, never staff)
+    if (id && accountCache.has(id)) ctx = { kind: 'CLIENT', id };
+  }
+  if (!ctx) return sendJson(ws, { type: 'AUTH_ERROR', error: 'Authentication failed.' });
+  ws.ctx = ctx;
+  sendJson(ws, { type: 'AUTH_OK', kind: ctx.kind, id: ctx.id });
+  if (ctx.kind === 'CLIENT') {
+    const b = balancePayload(ctx.id);
+    if (b) sendJson(ws, b);
+    sendJson(ws, positionsPayload(ctx.id));
+  } else {
+    sendJson(ws, portfolioPayloadFor(ctx, accountsWithPositions()));
+  }
+}
+
 wss.on('connection', (ws) => {
-  // A new client gets the complete book immediately, then incremental ticks.
+  ws.ctx = null;
+  ws.isAlive = true;
+  ws.on('pong', () => {
+    ws.isAlive = true;
+  });
+  // A new client gets the complete quote book immediately, then incremental ticks.
   refreshStaleness();
-  ws.send(
-    JSON.stringify({
-      type: 'MARKET_TICK',
-      data: { prices: snapshotQuotes(), full: true, positions: activePositions, feeds: feedSummary(), serverTime: Date.now() },
-    }),
-  );
+  sendJson(ws, { type: 'MARKET_TICK', data: { prices: snapshotQuotes(), full: true, feeds: feedSummary(), serverTime: Date.now() } });
 
-  ws.on('message', (message) => {
+  ws.on('message', async (message) => {
+    let msg;
     try {
-      const parsed = JSON.parse(message);
-      const { action, data } = parsed;
-      if (action === 'PLACE_ORDER') {
-        const { symbol, side, volume, leverage, clientId } = data;
-        const q = getLiveQuote(symbol);
-        if (!q) {
-          ws.send(JSON.stringify({ type: 'ORDER_REJECTED', symbol, reason: 'No live quote available (market closed or feed down).' }));
-          return;
-        }
-        const openPrice = side === 'BUY' ? q.ask : q.bid;
-        const conv = quoteToUsd(symbol) || 1;
-        const requiredMargin = (openPrice * volume * contractMultiplier(symbol) * conv) / (leverage || 100);
-        const newPos = {
-          id: nextPositionId++,
-          clientId,
-          symbol,
-          side,
-          volume,
-          leverage,
-          openPrice,
-          margin: requiredMargin,
-          pnl: 0,
-        };
-        markToMarket(newPos);
-        activePositions.push(newPos);
-        logClientActivity(clientId, 'PLACE_ORDER', { positionId: newPos.id, symbol, side, volume, openPrice });
-      }
-      if (action === 'CLOSE_POSITION') {
-        const { id, clientId } = data;
-        const posIndex = activePositions.findIndex((p) => p.id === id);
-        if (posIndex !== -1) {
-          const closedPos = activePositions[posIndex];
-          if (!getLiveQuote(closedPos.symbol)) {
-            ws.send(
-              JSON.stringify({
-                type: 'ORDER_REJECTED',
-                symbol: closedPos.symbol,
-                reason: 'Cannot close on a stale quote (market closed or feed down).',
-              }),
-            );
-            return;
-          }
-          markToMarket(closedPos);
-          const rawId = parseInt(String(clientId).replace('CL-', ''), 10);
-          db.run(`UPDATE clients SET balance = MAX(0, balance + ?) WHERE id = ?`, [closedPos.pnl, rawId], (err) => {
-            if (!err) broadcastBalanceUpdate(rawId);
-          });
-
-          activePositions.splice(posIndex, 1);
-          logClientActivity(rawId, 'CLOSE_POSITION', { positionId: id, realizedPnL: closedPos.pnl });
+      msg = JSON.parse(message);
+    } catch (e) {
+      return;
+    }
+    try {
+      const action = msg && msg.action;
+      if (action === 'AUTH') return await handleWsAuth(ws, msg);
+      if (action === 'PLACE_ORDER' || action === 'CLOSE_POSITION') {
+        // Legacy socket orders: only for an authenticated CLIENT socket, always for that client's own account.
+        if (!ws.ctx || ws.ctx.kind !== 'CLIENT') return sendJson(ws, { type: 'ORDER_REJECTED', reason: 'Not authenticated.' });
+        const data = msg.data || {};
+        try {
+          if (action === 'PLACE_ORDER') await openPosition(ws.ctx.id, data);
+          else await closePosition(ws.ctx.id, parseInt(data.id ?? data.positionId, 10));
+        } catch (e) {
+          sendJson(ws, { type: 'ORDER_REJECTED', symbol: data.symbol, reason: e.message });
         }
       }
     } catch (err) {
@@ -1240,9 +2195,36 @@ wss.on('connection', (ws) => {
     }
   });
 });
+setInterval(() => {
+  wss.clients.forEach((ws) => {
+    if (ws.isAlive === false) return ws.terminate();
+    ws.isAlive = false;
+    try {
+      ws.ping();
+    } catch (e) {
+      /* noop */
+    }
+  });
+}, 30000).unref();
+
+// ============================================================================
+// FALLBACKS, ERRORS, LISTEN
+// ============================================================================
+app.use('/api', (req, res) => res.status(404).json({ success: false, error: 'Unknown API endpoint.' }));
 app.get('*', (req, res) => {
   res.sendFile(path.resolve(__dirname, '../frontend/dist/index.html'));
 });
+// eslint-disable-next-line no-unused-vars
+app.use((err, req, res, next) => {
+  if (res.headersSent) return next(err);
+  if (err instanceof HttpError) return res.status(err.status).json({ success: false, error: err.message });
+  if (err && err.type === 'entity.too.large') return res.status(413).json({ success: false, error: 'Upload too large.' });
+  if (err && err.type === 'entity.parse.failed') return res.status(400).json({ success: false, error: 'Malformed request body.' });
+  console.error('[api] unhandled error:', err);
+  res.status(500).json({ success: false, error: 'Internal server error.' });
+});
+process.on('unhandledRejection', (e) => console.error('[process] unhandled rejection:', e));
+
 const HTTPS_PORT = process.env.HTTPS_PORT || 443;
 server.listen(HTTPS_PORT, '0.0.0.0', () => {
   console.log(`HTTPS Server listening on port ${HTTPS_PORT}`);

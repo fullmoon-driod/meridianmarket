@@ -493,73 +493,65 @@ function PanelTitle({ icon: Icon, children, right }) {
   );
 }
 // ==========================================
-// 5. ACCOUNT PERSISTENCE + VALUATION HELPERS
+// 5. ACCOUNT SYNC + VALUATION HELPERS
 // ==========================================
-// Each trader gets a dedicated record (balance + open positions) keyed by their
-// id/email. It is independent of the session object, so logging out and back in
-// can never reset it to the default balance.
-const ACCOUNT_STORE_PREFIX = 'meridian_account_v1:';
-// Any user "directory" arrays the login / CRM layer may keep; mirrored best-effort.
-const USER_DIRECTORY_KEYS = ['users', 'registered_users', 'all_users', 'crm_users', 'platform_users'];
-
+// The SERVER owns every balance, position and KYC decision (one database shared with the CRM).
+// This page only displays what the server says; nothing financial is read from localStorage.
 const getAccountKey = (user) => {
   const k = user && (user.id ?? user._id ?? user.clientId ?? user.email ?? user.username);
   return k ? String(k).trim().toLowerCase() : null;
 };
-
-const readAccount = (key) => {
+const getClientId = (user) => {
+  const raw = user && (user.id ?? user.clientId ?? user._id);
+  const n = parseInt(String(raw ?? '').replace(/^CL-/i, ''), 10);
+  return Number.isInteger(n) && n > 0 ? n : null;
+};
+// JSON helper for the server API. Throws an Error carrying the server's message and HTTP status.
+const apiCall = async (method, path, { token, body } = {}) => {
+  const res = await fetch(`${QUOTE_HTTP_URL || ''}${path}`, {
+    method,
+    headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    body: body ? JSON.stringify(body) : undefined,
+    cache: 'no-store',
+  });
+  let data = {};
   try {
-    const raw = localStorage.getItem(ACCOUNT_STORE_PREFIX + key);
-    if (!raw) return null;
-    const data = JSON.parse(raw);
-    const balance = parseFloat(data?.balance);
-    return {
-      balance: Number.isFinite(balance) ? balance : null,
-      positions: Array.isArray(data?.positions) ? data.positions : [],
-    };
+    data = await res.json();
   } catch (e) {
-    return null;
+    /* non-JSON error page */
+  }
+  if (!res.ok || data.success === false) {
+    const err = new Error(data.error || `Request failed (${res.status})`);
+    err.status = res.status;
+    throw err;
+  }
+  return data;
+};
+const toPosition = (p) => ({ ...p, type: p.type || p.side, live: true, time: p.openedAt ? new Date(p.openedAt).toLocaleTimeString() : '' });
+const readFileAsBase64 = (file) =>
+  new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(String(r.result).split(',')[1] || '');
+    r.onerror = () => reject(new Error('Could not read the selected file.'));
+    r.readAsDataURL(file);
+  });
+// Keep the session object other pages read in step with the server balance (display only).
+const mirrorSession = (balance) => {
+  try {
+    const raw = localStorage.getItem('current_user');
+    if (!raw) return;
+    const u = JSON.parse(raw);
+    if (u.balance === balance && u.balanceUSD === balance) return;
+    localStorage.setItem('current_user', JSON.stringify({ ...u, balance, balanceUSD: balance }));
+  } catch (e) {
+    /* storage unavailable */
   }
 };
-
-const sameUser = (a, b) => {
-  const ka = getAccountKey(a);
-  return !!ka && ka === getAccountKey(b);
-};
-
-const writeAccount = (user, balance, positions) => {
-  const key = getAccountKey(user);
-  if (!key) return;
-  try {
-    // 1) Dedicated per-account record (source of truth)
-    localStorage.setItem(ACCOUNT_STORE_PREFIX + key, JSON.stringify({ balance, positions }));
-    // 2) Active session object
-    const updatedUser = { ...user, balance, balanceUSD: balance };
-    localStorage.setItem('current_user', JSON.stringify(updatedUser));
-    // 3) Mirror into any user directory the login layer reads from
-    USER_DIRECTORY_KEYS.forEach((dirKey) => {
-      const raw = localStorage.getItem(dirKey);
-      if (!raw) return;
-      let list;
-      try {
-        list = JSON.parse(raw);
-      } catch (e) {
-        return;
-      }
-      if (!Array.isArray(list)) return;
-      let touched = false;
-      const next = list.map((u) => {
-        if (sameUser(u, user)) {
-          touched = true;
-          return { ...u, balance, balanceUSD: balance };
-        }
-        return u;
-      });
-      if (touched) localStorage.setItem(dirKey, JSON.stringify(next));
-    });
-  } catch (e) {
-    /* storage full / unavailable: keep trading in memory */
-  }
+const KYC_UI = {
+  unverified: { label: 'Unverified', cls: 'bg-slate-100 text-slate-600 border-slate-200' },
+  pending: { label: 'Under review', cls: 'bg-amber-50 text-amber-700 border-amber-200' },
+  verified: { label: 'Verified', cls: 'bg-emerald-50 text-emerald-700 border-emerald-200' },
+  rejected: { label: 'Rejected', cls: 'bg-rose-50 text-rose-700 border-rose-200' },
 };
 
 const contractMultiplierFor = (symbol) => (MULTI_ASSET_REGISTRY[symbol]?.category === 'Forex' ? 100000 : 100);
@@ -600,7 +592,7 @@ const quoteToUsd = (symbol, quotes) => {
    incremental ticks). If the socket drops, quotes are polled over HTTP until it
    reconnects; if both fail, every quote is flagged stale so nothing can trade on
    an old price. */
-function useLiveQuotes() {
+function useLiveQuotes(bridge) {
   const [quotes, setQuotes] = useState({});
   const [feed, setFeed] = useState({ status: 'connecting', lastTick: null, feeds: null });
   useEffect(() => {
@@ -612,6 +604,13 @@ function useLiveQuotes() {
     let attempt = 0;
     let lastMsg = 0;
     let pollFailures = 0;
+    // Identify this socket to the server so it can push THIS client's balance / KYC / position updates.
+    const sendAuth = () => {
+      const b = bridge && bridge.current;
+      if (!b || !b.clientId || !ws || ws.readyState !== WebSocket.OPEN) return;
+      ws.send(JSON.stringify({ action: 'AUTH', token: b.token || undefined, clientId: b.clientId }));
+    };
+    if (bridge && bridge.current) bridge.current.reauth = sendAuth;
 
     const merge = (incoming, full, meta) => {
       if (!alive || !incoming) return;
@@ -677,6 +676,7 @@ function useLiveQuotes() {
         attempt = 0;
         lastMsg = Date.now();
         stopPolling();
+        sendAuth();
       };
       socket.onmessage = (evt) => {
         lastMsg = Date.now();
@@ -688,6 +688,8 @@ function useLiveQuotes() {
         }
         if (msg && msg.type === 'MARKET_TICK' && msg.data) {
           merge(msg.data.prices || {}, !!msg.data.full, { status: 'live', feeds: msg.data.feeds });
+        } else if (msg && msg.type && bridge && bridge.current && bridge.current.onEvent) {
+          bridge.current.onEvent(msg); // BALANCE_UPDATE, POSITIONS_UPDATE, KYC_UPDATE, ACCOUNT_DELETED ...
         }
       };
       socket.onclose = () => {
@@ -742,12 +744,15 @@ export default function TradingDashboard() {
   const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState('assets');
   const [selectedCountry, setSelectedCountry] = useState('Philippines');
+  // status: 'unverified' | 'pending' (under review) | 'verified' | 'rejected'. Always loaded from the server.
   const [kycState, setKycState] = useState({
     status: 'unverified',
     fullName: '',
     idNumber: '',
     documentType: 'Passport',
+    note: '',
   });
+  const [kycBusy, setKycBusy] = useState(false);
   const kycFileInputRef = useRef(null);
   const [kycFile, setKycFile] = useState(null);
   const [kycFileError, setKycFileError] = useState('');
@@ -769,65 +774,134 @@ export default function TradingDashboard() {
     setKycFile(file);
   };
   const [currentUser, setCurrentUser] = useState(null);
-  // Financial state. `balanceUSD` and the raw open positions are persisted per account.
-  // Equity is NOT stored: it is derived below (balance + total floating PnL).
+  // Financial state. Everything below is a mirror of the server record; it is replaced by every
+  // snapshot / pushed event. Equity is derived: balance + total floating PnL.
   const [balanceUSD, setBalanceUSD] = useState(0.0);
+  const [bonusUSD, setBonusUSD] = useState(0.0);
   const [positionsState, setPositionsState] = useState([]);
-  const [accountKey, setAccountKey] = useState(null); // set only once hydration has finished
-  const [marginUsed] = useState(0.0);
+  const [accountKey, setAccountKey] = useState(null); // set once the first server snapshot has arrived
+  const [accountError, setAccountError] = useState('');
+  const [mustChangePassword, setMustChangePassword] = useState(false);
+  const [tradeBusy, setTradeBusy] = useState(false);
+  const [closingId, setClosingId] = useState(null);
+  const marginUsed = useMemo(() => round2(positionsState.reduce((sum, p) => sum + (Number(p.margin) || 0), 0)), [positionsState]);
   const accountKeyRef = useRef(null);
-  // Hydrate once per account: the saved record wins over whatever balance the
-  // session object carries (which may have been reset to the default at login).
+  const sessionRef = useRef({ token: null, clientId: null });
+  const kycStatusRef = useRef('unverified');
+  const handlersRef = useRef({});
+  const accountBridge = useRef({ token: null, clientId: null, onEvent: null, reauth: null });
+  // Watch for the logged-in account (login page writes `current_user`); detects account switches.
   useEffect(() => {
     const syncUserData = () => {
       try {
         const raw = localStorage.getItem('current_user');
         if (!raw) return;
         const user = JSON.parse(raw);
-        const key = getAccountKey(user);
         setCurrentUser((prev) => (JSON.stringify(prev) === JSON.stringify(user) ? prev : user));
-        if (key && key !== accountKeyRef.current) {
-          const saved = readAccount(key);
-          const sessionBalance = parseFloat(user.balance ?? user.balanceUSD ?? 0.0) || 0;
-          accountKeyRef.current = key;
-          // Batched: balance, positions and key land in the same render, so the
-          // save effect can never write default values over the stored record.
-          setBalanceUSD(saved && saved.balance !== null ? saved.balance : sessionBalance);
-          setPositionsState(saved ? saved.positions : []);
-          setAccountKey(key);
-        }
       } catch (e) {
         setCurrentUser(null);
       }
     };
     syncUserData();
-    const interval = setInterval(syncUserData, 2000); // detects account switches only
+    const interval = setInterval(syncUserData, 2000);
     return () => clearInterval(interval);
   }, []);
-  // Persist balance + open positions whenever they change (after hydration only).
-  // Positions are saved as raw trade data; PnL is always recomputed from live prices.
-  const positionsSig = positionsState.map((p) => p.id).join(',');
+  // Server snapshot -> screen state (balance, KYC, forced password change)
+  const applyClientSnapshot = (client) => {
+    if (!client) return;
+    const bal = Number(client.balance) || 0;
+    setBalanceUSD(bal);
+    setBonusUSD(Number(client.bonus) || 0);
+    setMustChangePassword(!!client.must_change_password);
+    mirrorSession(bal);
+    applyKyc(client);
+  };
+  const applyKyc = (k) => {
+    const status = k.kyc_state || 'unverified';
+    kycStatusRef.current = status;
+    setKycState((prev) => ({
+      ...prev,
+      status,
+      note: k.kyc_note || '',
+      fullName: prev.fullName || k.kyc_full_name || '',
+      idNumber: prev.idNumber || k.kyc_id_number || '',
+      documentType: prev.fullName || prev.idNumber ? prev.documentType : k.kyc_doc_type || prev.documentType,
+    }));
+  };
+  const sessionEnded = () => {
+    try {
+      localStorage.removeItem('current_user');
+    } catch (e) {
+      /* noop */
+    }
+    navigate('/');
+  };
+  // Pushed from the server the instant something changes (CRM balance edit, KYC decision, trade ...)
+  const applyEvent = (msg) => {
+    const myId = sessionRef.current.clientId;
+    if (msg.type === 'AUTH_ERROR') return sessionEnded(); // token revoked (password reset / deleted / expired)
+    if (msg.type === 'ACCOUNT_DELETED' && msg.clientId === myId) return sessionEnded();
+    if (msg.clientId !== myId) return;
+    if (msg.type === 'BALANCE_UPDATE') {
+      setBalanceUSD(Number(msg.balance) || 0);
+      setBonusUSD(Number(msg.bonus) || 0);
+      mirrorSession(Number(msg.balance) || 0);
+    } else if (msg.type === 'POSITIONS_UPDATE') {
+      setPositionsState((msg.positions || []).map(toPosition));
+    } else if (msg.type === 'KYC_UPDATE') {
+      const before = kycStatusRef.current;
+      applyKyc(msg);
+      if (before !== msg.kyc_state) {
+        if (msg.kyc_state === 'verified') showToast('Your identity has been verified.');
+        else if (msg.kyc_state === 'rejected') showToast(msg.kyc_note ? `KYC rejected: ${msg.kyc_note}` : 'Your KYC documents were rejected. Please resubmit.', 'error');
+      }
+    }
+  };
+  handlersRef.current = { applyClientSnapshot, applyEvent, sessionEnded };
+  // Load the account from the server, bind the live socket to it, and re-sync every 5s as a safety net.
+  const loginId = getClientId(currentUser);
+  const loginToken = currentUser && currentUser.token ? currentUser.token : null;
   useEffect(() => {
-    if (!accountKey || !currentUser) return;
-    writeAccount(currentUser, balanceUSD, positionsState);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [accountKey, balanceUSD, positionsSig]);
-  // Keep other tabs of the same account in sync
-  useEffect(() => {
-    if (!accountKey) return;
-    const onStorage = (e) => {
-      if (e.key !== ACCOUNT_STORE_PREFIX + accountKey || !e.newValue) return;
-      const saved = readAccount(accountKey);
-      if (!saved) return;
-      if (saved.balance !== null) setBalanceUSD(saved.balance);
-      setPositionsState(saved.positions);
+    if (!loginId) return undefined;
+    let alive = true;
+    if (accountKeyRef.current !== String(loginId)) {
+      // different account than before: never show the previous account's numbers
+      accountKeyRef.current = String(loginId);
+      setAccountKey(null);
+      setBalanceUSD(0);
+      setBonusUSD(0);
+      setPositionsState([]);
+      setKycState({ status: 'unverified', fullName: '', idNumber: '', documentType: 'Passport', note: '' });
+    }
+    sessionRef.current = { token: loginToken, clientId: loginId };
+    accountBridge.current.token = loginToken;
+    accountBridge.current.clientId = loginId;
+    accountBridge.current.onEvent = (m) => handlersRef.current.applyEvent(m);
+    if (accountBridge.current.reauth) accountBridge.current.reauth();
+    const load = async () => {
+      try {
+        const data = await apiCall('GET', `/api/client/account/${loginId}`, { token: loginToken });
+        if (!alive) return;
+        handlersRef.current.applyClientSnapshot(data.client);
+        setPositionsState((data.positions || []).map(toPosition));
+        setAccountKey(String(loginId));
+        setAccountError('');
+      } catch (e) {
+        if (!alive) return;
+        if (e.status === 401 || e.status === 403 || e.status === 404) handlersRef.current.sessionEnded();
+        else setAccountError(e.message || 'Cannot reach the server');
+      }
     };
-    window.addEventListener('storage', onStorage);
-    return () => window.removeEventListener('storage', onStorage);
-  }, [accountKey]);
+    load();
+    const t = setInterval(load, 5000);
+    return () => {
+      alive = false;
+      clearInterval(t);
+    };
+  }, [loginId, loginToken]);
   // Active Selected Market Ticker
   const [selectedAssetKey, setSelectedAssetKey] = useState('EUR/USD');
-  const { quotes, feed } = useLiveQuotes();
+  const { quotes, feed } = useLiveQuotes(accountBridge);
   // Order Ticket State
   const [orderVolume, setOrderVolume] = useState('1.00');
   const [stopLoss, setStopLoss] = useState('');
@@ -916,47 +990,64 @@ export default function TradingDashboard() {
     setActiveTab(key);
     setAccountMenuOpen(false);
   };
-  const showToast = (msg) => {
-    setToast({ msg, id: Date.now() });
-    setTimeout(() => setToast(null), 2600);
+  const showToast = (msg, tone = 'ok') => {
+    setToast({ msg, tone, id: Date.now() });
+    setTimeout(() => setToast(null), tone === 'error' ? 4200 : 2600);
   };
-  const handleExecuteTrade = (type) => {
+  // Orders are filled by the SERVER at the live bid/ask; the screen only shows what it confirmed.
+  const handleExecuteTrade = async (type) => {
+    if (tradeBusy) return;
     if (!canTrade) {
-      showToast(tradeBlockReason || 'Trading unavailable.');
+      showToast(tradeBlockReason || 'Trading unavailable.', 'error');
+      return;
+    }
+    const { token, clientId } = sessionRef.current;
+    if (!clientId) {
+      showToast('Please sign in again to trade.', 'error');
       return;
     }
     const vol = parseFloat(orderVolume) || 0.1;
-    // Fill at the real market: buyers lift the ask, sellers hit the bid.
-    const fillPrice = type === 'BUY' ? activeAsk : activeBid;
-    const newPosition = {
-      id: Date.now() * 1000 + Math.floor(Math.random() * 1000),
-      symbol: selectedAssetKey,
-      type: type,
-      live: true,
-      volume: vol,
-      openPrice: fillPrice,
-      sl: parseFloat(stopLoss) || 0,
-      tp: parseFloat(takeProfit) || 0,
-      time: new Date().toLocaleTimeString(),
-    };
-    setPositionsState((prev) => [newPosition, ...prev]);
-    showToast(`${type} ${vol} lots ${selectedAssetKey} @ ${fillPrice.toFixed(activeAsset.digits)}`);
+    setTradeBusy(true);
+    try {
+      const data = await apiCall('POST', '/api/trade/open', {
+        token,
+        body: { clientId, symbol: selectedAssetKey, side: type, volume: vol, sl: parseFloat(stopLoss) || 0, tp: parseFloat(takeProfit) || 0 },
+      });
+      const pos = toPosition(data.position);
+      setPositionsState((prev) => [pos, ...prev.filter((p) => p.id !== pos.id)]);
+      if (Number.isFinite(data.balance)) setBalanceUSD(data.balance);
+      showToast(`${type} ${vol} lots ${selectedAssetKey} @ ${Number(pos.openPrice).toFixed(activeAsset.digits)}`);
+    } catch (e) {
+      showToast(e.message || 'Order rejected.', 'error');
+    } finally {
+      setTradeBusy(false);
+    }
   };
-  const handleClosePosition = (posId) => {
+  const handleClosePosition = async (posId) => {
+    if (closingId) return;
     const targetPos = openPositions.find((p) => p.id === posId); // carries live PnL
     if (!targetPos) return;
     if (!targetPos.closable || targetPos.pnl === null) {
-      showToast('Cannot close right now: no live quote (market closed or feed down).');
+      showToast('Cannot close right now: no live quote (market closed or feed down).', 'error');
       return;
     }
-    // Realise PnL into the balance and drop the position in one batched update;
-    // the persistence effect then saves both together.
-    setBalanceUSD((prev) => round2(prev + (targetPos.pnl || 0)));
-    setPositionsState((prev) => prev.filter((p) => p.id !== posId));
+    const { token, clientId } = sessionRef.current;
+    setClosingId(posId);
+    try {
+      const data = await apiCall('POST', '/api/trade/close', { token, body: { clientId, positionId: posId } });
+      setPositionsState((prev) => prev.filter((p) => p.id !== posId));
+      if (Number.isFinite(data.balance)) setBalanceUSD(data.balance);
+      showToast(`Closed ${targetPos.symbol} · realised ${fmtPnl(data.realizedPnl)}`);
+    } catch (e) {
+      showToast(e.message || 'Could not close the position.', 'error');
+      if (e.status === 404) setPositionsState((prev) => prev.filter((p) => p.id !== posId)); // already closed elsewhere
+    } finally {
+      setClosingId(null);
+    }
   };
   const handleLogout = () => {
-    // Flush the latest state before leaving so nothing is lost
-    if (accountKey && currentUser) writeAccount(currentUser, balanceUSD, positionsState);
+    const { token } = sessionRef.current;
+    if (token) fetch(`${QUOTE_HTTP_URL || ''}/api/auth/logout`, { method: 'POST', headers: { Authorization: `Bearer ${token}` } }).catch(() => {});
     navigate('/');
   };
   const handleCopyAddress = (addr, id = null) => {
@@ -986,10 +1077,64 @@ export default function TradingDashboard() {
     setWithdrawForm({ accountName: '', amount: '', paymentMethod: 'Bank Transfer', paymentDetails: '' });
     alert(`Withdrawal request of $${amt.toLocaleString()} submitted successfully!\n\nStatus: Pending Processing.`);
   };
-  const handleKycSubmit = (e) => {
+  const handleKycSubmit = async (e) => {
     e.preventDefault();
-    setKycState({ ...kycState, status: 'pending' });
-    alert('KYC Documentation submitted successfully!\n\nAwaiting Brokerage Compliance review.');
+    if (kycBusy || kycState.status === 'verified') return;
+    const { token, clientId } = sessionRef.current;
+    if (!clientId) {
+      showToast('Please sign in again to submit documents.', 'error');
+      return;
+    }
+    if (!kycFile) {
+      setKycFileError('Please attach a photo or scan of your ID document.');
+      return;
+    }
+    setKycBusy(true);
+    try {
+      const dataBase64 = await readFileAsBase64(kycFile);
+      const data = await apiCall('POST', '/api/client/kyc/submit', {
+        token,
+        body: {
+          clientId,
+          fullName: kycState.fullName,
+          documentType: kycState.documentType,
+          idNumber: kycState.idNumber,
+          fileName: kycFile.name,
+          dataBase64,
+        },
+      });
+      handlersRef.current.applyClientSnapshot(data.client);
+      setKycFile(null);
+      setKycFileError('');
+      showToast('Documents received. Awaiting compliance review.');
+    } catch (err) {
+      setKycFileError(err.message || 'Upload failed. Please try again.');
+      showToast(err.message || 'Upload failed. Please try again.', 'error');
+    } finally {
+      setKycBusy(false);
+    }
+  };
+  // Forced after a CRM password reset
+  const [pwForm, setPwForm] = useState({ current: '', next: '', confirm: '' });
+  const [pwError, setPwError] = useState('');
+  const [pwBusy, setPwBusy] = useState(false);
+  const handleChangePassword = async (e) => {
+    e.preventDefault();
+    setPwError('');
+    if (pwForm.next.length < 6) return setPwError('Your new password must be at least 6 characters.');
+    if (pwForm.next !== pwForm.confirm) return setPwError('The new passwords do not match.');
+    const { token, clientId } = sessionRef.current;
+    setPwBusy(true);
+    try {
+      await apiCall('POST', '/api/client/change-password', { token, body: { clientId, currentPassword: pwForm.current, newPassword: pwForm.next } });
+      setMustChangePassword(false);
+      setPwForm({ current: '', next: '', confirm: '' });
+      showToast('Password updated.');
+    } catch (err) {
+      setPwError(err.message || 'Could not update the password.');
+    } finally {
+      setPwBusy(false);
+    }
   };
   const filteredAssets = Object.keys(MULTI_ASSET_REGISTRY).filter((key) => {
     if (assetCategoryFilter === 'ALL') return true;
@@ -1052,8 +1197,8 @@ export default function TradingDashboard() {
         '.';
     }
   }
-  const kycBadge =
-    kycState.status === 'pending' ? 'bg-amber-50 text-amber-700 border-amber-200' : 'bg-slate-100 text-slate-600 border-slate-200';
+  const kycUi = KYC_UI[kycState.status] || KYC_UI.unverified;
+  const kycBadge = kycUi.cls;
   /* ---------- Reusable blocks ---------- */
   const activeAssetBar = (
     <div className="td-panel rounded-2xl px-4 py-3 flex items-center justify-between gap-3">
@@ -1600,7 +1745,7 @@ export default function TradingDashboard() {
                   <div className="grid grid-cols-2 gap-3">
                     <button
                       onClick={() => handleExecuteTrade('BUY')}
-                      disabled={!canTrade}
+                      disabled={!canTrade || tradeBusy}
                       className="td-buy py-4 text-white font-extrabold text-sm rounded-xl shadow-lg shadow-emerald-600/20 flex flex-col items-center leading-tight disabled:opacity-40 disabled:cursor-not-allowed"
                     >
                       <span>BUY / LONG</span>
@@ -1608,7 +1753,7 @@ export default function TradingDashboard() {
                     </button>
                     <button
                       onClick={() => handleExecuteTrade('SELL')}
-                      disabled={!canTrade}
+                      disabled={!canTrade || tradeBusy}
                       className="td-sell py-4 text-white font-extrabold text-sm rounded-xl shadow-lg shadow-rose-600/20 flex flex-col items-center leading-tight disabled:opacity-40 disabled:cursor-not-allowed"
                     >
                       <span>SELL / SHORT</span>
@@ -1686,7 +1831,8 @@ export default function TradingDashboard() {
                             <span className="td-num text-[11px] text-slate-500">#{pos.id}</span>
                             <button
                               onClick={() => handleClosePosition(pos.id)}
-                              className="px-3 py-1.5 bg-white hover:bg-rose-600 hover:text-white border border-rose-300 text-rose-600 rounded-lg text-xs font-bold transition"
+                              disabled={closingId === pos.id}
+                              className="disabled:opacity-50 px-3 py-1.5 bg-white hover:bg-rose-600 hover:text-white border border-rose-300 text-rose-600 rounded-lg text-xs font-bold transition"
                             >
                               Close
                             </button>
@@ -1742,7 +1888,8 @@ export default function TradingDashboard() {
                               <td className="py-3 text-right">
                                 <button
                                   onClick={() => handleClosePosition(pos.id)}
-                                  className="px-2.5 py-1 bg-white hover:bg-rose-600 hover:text-white border border-rose-300 text-rose-600 rounded-lg text-[11px] font-bold transition"
+                                  disabled={closingId === pos.id}
+                                  className="disabled:opacity-50 px-2.5 py-1 bg-white hover:bg-rose-600 hover:text-white border border-rose-300 text-rose-600 rounded-lg text-[11px] font-bold transition"
                                 >
                                   Close
                                 </button>
@@ -1906,11 +2053,37 @@ export default function TradingDashboard() {
                   </h2>
                   <p className="text-sm text-slate-500 mt-1.5">Submit official identification to activate unverified withdrawal limits.</p>
                 </div>
-                <span className={`shrink-0 px-2.5 py-1 rounded-lg text-[11px] font-bold border ${kycBadge}`}>
-                  {kycState.status === 'pending' ? 'Under review' : 'Unverified'}
-                </span>
+                <span className={`shrink-0 px-2.5 py-1 rounded-lg text-[11px] font-bold border ${kycBadge}`}>{kycUi.label}</span>
               </div>
-              <form onSubmit={handleKycSubmit} className="space-y-4">
+              {kycState.status === 'verified' && (
+                <div className="rounded-xl p-4 flex items-start gap-3 bg-emerald-50 border border-emerald-200">
+                  <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" />
+                  <div>
+                    <div className="text-sm font-bold text-emerald-800">Identity verified</div>
+                    <p className="text-xs text-emerald-900/80 mt-0.5">Your documents were approved by Brokerage Compliance. No further action is needed.</p>
+                  </div>
+                </div>
+              )}
+              {kycState.status === 'pending' && (
+                <div className="rounded-xl p-4 flex items-start gap-3 bg-amber-50 border border-amber-200">
+                  <Clock className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+                  <div>
+                    <div className="text-sm font-bold text-amber-800">Documents received — under review</div>
+                    <p className="text-xs text-amber-900/80 mt-0.5">Your status updates here automatically as soon as Compliance decides. You may add another document below if asked.</p>
+                  </div>
+                </div>
+              )}
+              {kycState.status === 'rejected' && (
+                <div className="rounded-xl p-4 flex items-start gap-3 bg-rose-50 border border-rose-200">
+                  <AlertCircle className="w-5 h-5 text-rose-600 shrink-0 mt-0.5" />
+                  <div>
+                    <div className="text-sm font-bold text-rose-800">Verification was not approved</div>
+                    <p className="text-xs text-rose-900/80 mt-0.5 whitespace-pre-wrap">{kycState.note || 'Please check your details and upload a clear, complete photo of your ID document.'}</p>
+                  </div>
+                </div>
+              )}
+              {accountError && <p className="text-xs text-amber-700">Connection issue: {accountError}. Your status will refresh when the server is reachable.</p>}
+              <form onSubmit={handleKycSubmit} className={`space-y-4 ${kycState.status === 'verified' ? 'hidden' : ''}`}>
                 <div>
                   <label className={LABEL}>Full Legal Name</label>
                   <input
@@ -1971,8 +2144,8 @@ export default function TradingDashboard() {
                     {kycFileError || (kycFile ? kycFile.name : 'PNG, JPG or PDF (Max 10MB)')}
                   </div>
                 </div>
-                <button type="submit" className={`${BTN_PRIMARY} w-full py-3.5 text-sm`}>
-                  Submit KYC Documentation
+                <button type="submit" disabled={kycBusy} className={`${BTN_PRIMARY} w-full py-3.5 text-sm disabled:opacity-60`}>
+                  {kycBusy ? 'Uploading…' : kycState.status === 'pending' ? 'Submit additional document' : 'Submit KYC Documentation'}
                 </button>
               </form>
             </div>
@@ -1997,7 +2170,7 @@ export default function TradingDashboard() {
                 </div>
                 <div className="flex items-center gap-2 shrink-0 flex-wrap">
                   <span className={`px-3 py-1.5 rounded-lg text-[11px] font-bold border ${kycBadge}`}>
-                    KYC: {kycState.status === 'pending' ? 'Under review' : 'Unverified'}
+                    KYC: {kycUi.label}
                   </span>
                   <span className="px-3 py-1.5 rounded-lg text-[11px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 flex items-center gap-1.5">
                     <CheckCircle2 className="w-3 h-3" /> Active
@@ -2039,6 +2212,7 @@ export default function TradingDashboard() {
                 />
                 <ProfileField icon={Star} label="Account type" value={currentUser?.accountType || currentUser?.tier || currentUser?.plan} />
                 <ProfileField icon={Wallet} label="Balance" value={fmtUSD(balanceUSD)} />
+                <ProfileField icon={Star} label="Bonus" value={fmtUSD(bonusUSD)} />
                 <ProfileField icon={TrendingUp} label="Equity" value={fmtUSD(equityUSD)} />
                 <ProfileField icon={Layers} label="Margin used" value={fmtUSD(marginUsed)} />
                 <ProfileField icon={Gauge} label="Free margin" value={fmtUSD(freeMargin)} />
@@ -2062,10 +2236,10 @@ export default function TradingDashboard() {
         <div className="fixed inset-x-0 bottom-24 md:bottom-8 z-50 flex justify-center px-4 pointer-events-none">
           <div
             key={toast.id}
-            className="td-toast bg-slate-900 text-white text-xs font-semibold td-num px-4 py-3 rounded-xl shadow-xl flex items-center gap-2 max-w-full"
+            className={`td-toast ${toast.tone === 'error' ? 'bg-rose-700' : 'bg-slate-900'} text-white text-xs font-semibold td-num px-4 py-3 rounded-xl shadow-xl flex items-center gap-2 max-w-full`}
             role="status"
           >
-            <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+            {toast.tone === 'error' ? <AlertCircle className="w-4 h-4 text-white shrink-0" /> : <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />}
             <span className="truncate">{toast.msg}</span>
           </div>
         </div>
@@ -2097,6 +2271,36 @@ export default function TradingDashboard() {
           })}
         </div>
       </nav>
+      {/* FORCED PASSWORD CHANGE (after a CRM password reset) */}
+      {mustChangePassword && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 z-[70] overflow-y-auto" role="dialog" aria-modal="true" aria-label="Choose a new password">
+          <form onSubmit={handleChangePassword} className="td-panel rounded-3xl max-w-md w-full p-6 relative my-auto td-enter space-y-4">
+            <div className="pb-3 border-b border-slate-200">
+              <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
+                <Shield className="w-5 h-5 text-blue-600" />
+                <span>Choose a new password</span>
+              </h3>
+              <p className="text-xs text-slate-500 mt-1.5">Your password was reset to a temporary one. Set a personal password to keep using your account.</p>
+            </div>
+            <div>
+              <label className={LABEL}>Temporary password</label>
+              <input type="password" required autoComplete="current-password" value={pwForm.current} onChange={(e) => setPwForm({ ...pwForm, current: e.target.value })} className={FIELD} />
+            </div>
+            <div>
+              <label className={LABEL}>New password</label>
+              <input type="password" required minLength={6} autoComplete="new-password" value={pwForm.next} onChange={(e) => setPwForm({ ...pwForm, next: e.target.value })} className={FIELD} />
+            </div>
+            <div>
+              <label className={LABEL}>Confirm new password</label>
+              <input type="password" required minLength={6} autoComplete="new-password" value={pwForm.confirm} onChange={(e) => setPwForm({ ...pwForm, confirm: e.target.value })} className={FIELD} />
+            </div>
+            {pwError && <p className="text-xs font-semibold text-red-600" role="alert">{pwError}</p>}
+            <button type="submit" disabled={pwBusy} className={`${BTN_PRIMARY} w-full py-3.5 text-sm disabled:opacity-60`}>
+              {pwBusy ? 'Saving…' : 'Save new password'}
+            </button>
+          </form>
+        </div>
+      )}
       {/* DEPOSIT MODAL POPUP */}
       {isDepositOpen && (
         <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4 z-[60]">
