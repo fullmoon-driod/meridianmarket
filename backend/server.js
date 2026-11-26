@@ -6,7 +6,16 @@ const cors = require('cors');
 const sqlite3 = require('sqlite3').verbose();
 const path = require('path');
 const fs = require('fs');
+// Load .env from the folder that contains server.js (works no matter where the process is
+// started from, e.g. pm2/systemd), then fall back to the current working directory.
+const envFile = path.resolve(__dirname, '.env');
+const envLoaded = require('dotenv').config({ path: envFile });
 require('dotenv').config();
+console.log(
+  envLoaded.error
+    ? `[config] no .env file found at ${envFile} (using the process environment only)`
+    : `[config] loaded .env from ${envFile}`,
+);
 const app = express();
 // --- SSL CERTIFICATE CONFIGURATION ---
 let sslOptions = {};
@@ -684,6 +693,13 @@ addInstruments(
 // the same symbol as the dashboard; commodities and indices need an explicit mapping, e.g.
 //   TWELVEDATA_SYMBOL_MAP={"USOIL":"WTI/USD","SPX500":"SPX"}
 // Anything without a mapping simply has no quote (and cannot be traded).
+const TWELVE_KEY = (
+  process.env.TWELVEDATA_API_KEY ||
+  process.env.TWELVE_DATA_API_KEY ||
+  process.env.TWELVEDATA_KEY ||
+  process.env.TWELVE_DATA_KEY ||
+  ''
+).trim();
 const HAS_OANDA = !!(process.env.OANDA_API_TOKEN && process.env.OANDA_ACCOUNT_ID);
 const HAS_ALPACA = !!(process.env.ALPACA_KEY_ID && process.env.ALPACA_SECRET_KEY);
 let twelveSymbolMap = {};
@@ -692,7 +708,10 @@ try {
 } catch (e) {
   console.warn('[feed:twelvedata] TWELVEDATA_SYMBOL_MAP is not valid JSON; ignoring it.');
 }
-if (process.env.TWELVEDATA_API_KEY) {
+console.log(
+  `[config] API keys detected -> OANDA: ${HAS_OANDA ? 'yes' : 'no'}, Alpaca: ${HAS_ALPACA ? 'yes' : 'no'}, Twelve Data: ${TWELVE_KEY ? 'yes' : 'no'}`,
+);
+if (TWELVE_KEY) {
   Object.entries(INSTRUMENTS).forEach(([symbol, cfg]) => {
     if (cfg.category === 'Crypto') return;
     const servedNatively = (cfg.provider === 'oanda' && HAS_OANDA) || (cfg.provider === 'alpaca' && HAS_ALPACA);
@@ -709,6 +728,7 @@ Object.entries(INSTRUMENTS).forEach(([symbol, cfg]) => {
 });
 
 const feedStatus = { oanda: 'disabled', binance: 'disabled', alpaca: 'disabled', twelvedata: 'disabled' };
+const feedNotes = { oanda: '', binance: '', alpaca: '', twelvedata: '' }; // last failure reason, shown in the dashboard
 
 // ---- Quote store ------------------------------------------------------------
 const quotes = new Map(); // symbol -> { bid, ask, ts, tradeable, stale, open, dayKey }
@@ -795,6 +815,7 @@ function startOandaFeed() {
       finished = true;
       clearInterval(watchdog);
       feedStatus.oanda = 'reconnecting';
+      feedNotes.oanda = String(reason).slice(0, 200);
       const delay = Math.min(1000 * 2 ** attempt, 30000);
       attempt += 1;
       console.warn(`[feed:oanda] ${reason}; reconnecting in ${delay / 1000}s`);
@@ -824,6 +845,7 @@ function startOandaFeed() {
           return;
         }
         feedStatus.oanda = 'connected';
+        feedNotes.oanda = '';
         attempt = 0;
         console.log(`[feed:oanda] streaming ${Object.keys(bySymbol).length} instruments`);
         res.setEncoding('utf8');
@@ -895,6 +917,7 @@ function startBinanceFeed() {
       finished = true;
       clearInterval(watchdog);
       feedStatus.binance = 'reconnecting';
+      feedNotes.binance = String(reason).slice(0, 200);
       const delay = Math.min(1000 * 2 ** attempt, 30000);
       attempt += 1;
       console.warn(`[feed:binance] ${reason}; reconnecting in ${delay / 1000}s`);
@@ -903,6 +926,7 @@ function startBinanceFeed() {
 
     ws.on('open', () => {
       feedStatus.binance = 'connected';
+      feedNotes.binance = '';
       attempt = 0;
       console.log(`[feed:binance] streaming ${Object.keys(bySymbol).length} instruments`);
     });
@@ -961,9 +985,11 @@ function startAlpacaFeed() {
       if (failures > 0 || feedStatus.alpaca !== 'connected') console.log('[feed:alpaca] polling OK');
       failures = 0;
       feedStatus.alpaca = 'connected';
+      feedNotes.alpaca = '';
     } catch (e) {
       failures += 1;
       feedStatus.alpaca = 'error';
+      feedNotes.alpaca = String(e.message).slice(0, 200);
       if (failures === 1 || failures % 30 === 0) console.warn(`[feed:alpaca] poll failed: ${e.message}`);
     }
   };
@@ -977,7 +1003,7 @@ function startAlpacaFeed() {
 // TWELVEDATA_SPREAD_BPS) and the quote is flagged `est` so the UI labels the spread "est.".
 // A paid Twelve Data plan is required to stream more than a handful of symbols.
 function startTwelveDataFeed() {
-  const key = process.env.TWELVEDATA_API_KEY;
+  const key = TWELVE_KEY;
   const bySymbol = symbolsBySource.twelvedata;
   const symbols = Object.keys(bySymbol);
   if (!key) return;
@@ -1013,6 +1039,7 @@ function startTwelveDataFeed() {
       clearInterval(watchdog);
       clearInterval(heartbeat);
       feedStatus.twelvedata = 'reconnecting';
+      feedNotes.twelvedata = String(reason).slice(0, 200);
       const delay = Math.min(1000 * 2 ** attempt, 30000);
       attempt += 1;
       console.warn(`[feed:twelvedata] ${reason}; reconnecting in ${delay / 1000}s`);
@@ -1021,6 +1048,7 @@ function startTwelveDataFeed() {
 
     ws.on('open', () => {
       feedStatus.twelvedata = 'connected';
+      feedNotes.twelvedata = '';
       attempt = 0;
       ws.send(JSON.stringify({ action: 'subscribe', params: { symbols: symbols.join(',') } }));
       heartbeat = setInterval(() => ws.readyState === WebSocket.OPEN && ws.send(JSON.stringify({ action: 'heartbeat' })), 10000);
@@ -1035,8 +1063,18 @@ function startTwelveDataFeed() {
         return;
       }
       if (m.event === 'subscribe-status') {
-        const fails = (m.fails || []).map((f) => f.symbol || f).join(',');
-        if (fails) console.warn(`[feed:twelvedata] could not subscribe to: ${fails.slice(0, 300)} (plan limit or unknown symbol)`);
+        const failed = (m.fails || []).map((f) => f.symbol || f);
+        const ok = (m.success || []).length;
+        if (failed.length) {
+          console.warn(`[feed:twelvedata] could not subscribe to ${failed.length} symbols (plan limit or unknown symbol): ${failed.join(',').slice(0, 300)}`);
+          feedNotes.twelvedata = `subscribed to ${ok}, rejected ${failed.length} (plan limit or unknown symbol)`;
+        }
+        return;
+      }
+      if (m.status === 'error' || m.event === 'error' || m.code >= 400) {
+        const why = String(m.message || m.msg || JSON.stringify(m)).slice(0, 200);
+        console.warn(`[feed:twelvedata] API error: ${why}`);
+        feedNotes.twelvedata = `API error: ${why}`;
         return;
       }
       if (m.event !== 'price') return;
@@ -1093,7 +1131,13 @@ function markToMarket(pos) {
   pos.pnl = parseFloat((delta * pos.volume * contractMultiplier(pos.symbol) * conv).toFixed(2));
 }
 
-const feedSummary = () => ({ ...feedStatus, quotes: quotes.size, instruments: Object.keys(INSTRUMENTS).length });
+const feedSummary = () => ({
+  ...feedStatus,
+  notes: { ...feedNotes },
+  keys: { oanda: HAS_OANDA, alpaca: HAS_ALPACA, twelvedata: !!TWELVE_KEY },
+  quotes: quotes.size,
+  instruments: Object.keys(INSTRUMENTS).length,
+});
 
 function broadcast(payload) {
   const text = JSON.stringify(payload);

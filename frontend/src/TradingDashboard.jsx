@@ -1037,9 +1037,20 @@ export default function TradingDashboard() {
     feedUi.dot = 'bg-rose-500';
     feedUi.label = 'Connected, but no quotes received';
     const f = feed.feeds;
-    feedHint = f
-      ? `Provider status: OANDA ${f.oanda}, Binance ${f.binance}, Alpaca ${f.alpaca}. Check the API keys in the server .env and the server log.`
-      : 'The server is not sending live quotes. Make sure the updated server.js is the one running (restart it).';
+    if (!f) {
+      feedHint = 'The server is not sending live quotes. Make sure the updated server.js is the one running (restart it).';
+    } else if (f.keys && !f.keys.oanda && !f.keys.alpaca && !f.keys.twelvedata) {
+      feedHint =
+        'The server found no market-data API key. Check that TWELVEDATA_API_KEY is in the .env file next to server.js, then restart the server.';
+    } else {
+      const names = { oanda: 'OANDA', binance: 'Binance', alpaca: 'Alpaca', twelvedata: 'Twelve Data' };
+      feedHint =
+        'Provider status: ' +
+        Object.keys(names)
+          .map((k) => `${names[k]} ${f[k]}${f.notes && f.notes[k] ? ` (${f.notes[k]})` : ''}`)
+          .join(', ') +
+        '.';
+    }
   }
   const kycBadge =
     kycState.status === 'pending' ? 'bg-amber-50 text-amber-700 border-amber-200' : 'bg-slate-100 text-slate-600 border-slate-200';
