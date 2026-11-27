@@ -2458,7 +2458,13 @@ setInterval(() => {
 // ============================================================================
 app.use('/api', (req, res) => res.status(404).json({ success: false, error: 'Unknown API endpoint.' }));
 app.get('*', (req, res) => {
-  res.sendFile(path.resolve(__dirname, '../frontend/dist/index.html'));
+  const indexFile = path.resolve(__dirname, '../frontend/dist/index.html');
+  res.sendFile(indexFile, (err) => {
+    if (!err || res.headersSent) return;
+    // The website files are missing (frontend not built / built into another folder / build still running)
+    console.error(`[spa] cannot serve ${indexFile}: ${err.code || err.message}. Build the frontend (npm run build) so that ../frontend/dist/index.html exists next to this server's folder.`);
+    res.status(503).type('text/plain').send('The website files are not available right now. The server cannot find the frontend build (frontend/dist/index.html).');
+  });
 });
 // eslint-disable-next-line no-unused-vars
 app.use((err, req, res, next) => {
