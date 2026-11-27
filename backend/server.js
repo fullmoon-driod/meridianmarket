@@ -235,6 +235,12 @@ async function initDatabase() {
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (agent_id) REFERENCES crm_agents(id) ON DELETE SET NULL
     )`);
+  // Base columns every query below relies on, for databases created by much older versions of this server
+  await addColumn('crm_agents', 'role', "TEXT DEFAULT 'AGENT'");
+  await addColumn('crm_agents', 'created_at', 'DATETIME');
+  await addColumn('clients', 'created_at', 'DATETIME');
+  await dbRun(`UPDATE clients SET created_at = CURRENT_TIMESTAMP WHERE created_at IS NULL`);
+  await dbRun(`UPDATE crm_agents SET created_at = CURRENT_TIMESTAMP WHERE created_at IS NULL`);
   // Columns added over time (checked against the real schema, not "try and ignore the error")
   await addColumn('clients', 'agent_id', 'INTEGER');
   await addColumn('clients', 'ip_address', 'TEXT');
@@ -264,13 +270,27 @@ async function initDatabase() {
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE CASCADE
     )`);
+  // Older databases may hold a transactions table with fewer columns: bring it up to date column by column.
+  // Rows that pre-date the status column are history, not open requests, so they must never show up as pending
+  // (approving one would credit the client a second time).
+  const txHadStatus = (await dbAll(`PRAGMA table_info(transactions)`)).some((c) => c.name === 'status');
+  await addColumn('transactions', 'status', 'TEXT');
+  if (!txHadStatus) await dbRun(`UPDATE transactions SET status = 'APPROVED' WHERE status IS NULL`);
+  await addColumn('transactions', 'method', 'TEXT');
+  await addColumn('transactions', 'tx_hash', 'TEXT');
+  await addColumn('transactions', 'created_at', 'DATETIME');
   // Review trail for deposit / withdrawal requests (who decided, when, and why)
   await addColumn('transactions', 'details', 'TEXT'); // withdrawal payout details (account name / IBAN / wallet ...)
   await addColumn('transactions', 'note', 'TEXT');
   await addColumn('transactions', 'processed_by', 'TEXT');
   await addColumn('transactions', 'processed_at', 'DATETIME');
-  await dbRun(`CREATE INDEX IF NOT EXISTS idx_tx_status ON transactions (status, id)`);
-  await dbRun(`CREATE INDEX IF NOT EXISTS idx_tx_client ON transactions (client_id)`);
+  // Indexes only speed things up: a problem creating one must never take the whole database offline
+  for (const ddl of [
+    `CREATE INDEX IF NOT EXISTS idx_tx_status ON transactions (status, id)`,
+    `CREATE INDEX IF NOT EXISTS idx_tx_client ON transactions (client_id)`,
+  ]) {
+    await dbRun(ddl).catch((e) => console.warn('[db] optional index skipped:', e.message));
+  }
   await dbRun(`
     CREATE TABLE IF NOT EXISTS client_logs (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -280,6 +300,9 @@ async function initDatabase() {
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE CASCADE
     )`);
+  await addColumn('client_logs', 'action_type', 'TEXT');
+  await addColumn('client_logs', 'details', 'TEXT');
+  await addColumn('client_logs', 'created_at', 'DATETIME');
   // Uploaded verification documents (files live in ./uploads/kyc, metadata lives here)
   await dbRun(`
     CREATE TABLE IF NOT EXISTS kyc_documents (
@@ -344,10 +367,10 @@ async function initDatabase() {
     )`);
   await dbRun(`CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)`);
 
-  await dbRun(`CREATE INDEX IF NOT EXISTS idx_positions_client_status ON positions (client_id, status)`);
-  await dbRun(`CREATE INDEX IF NOT EXISTS idx_kycdocs_client ON kyc_documents (client_id)`);
-  await dbRun(`CREATE INDEX IF NOT EXISTS idx_clients_agent ON clients (agent_id)`);
-  await dbRun(`CREATE INDEX IF NOT EXISTS idx_sessions_subject ON sessions (kind, subject_id)`);
+  await dbRun(`CREATE INDEX IF NOT EXISTS idx_positions_client_status ON positions (client_id, status)`).catch((e) => console.warn('[db] optional index skipped:', e.message));
+  await dbRun(`CREATE INDEX IF NOT EXISTS idx_kycdocs_client ON kyc_documents (client_id)`).catch((e) => console.warn('[db] optional index skipped:', e.message));
+  await dbRun(`CREATE INDEX IF NOT EXISTS idx_clients_agent ON clients (agent_id)`).catch((e) => console.warn('[db] optional index skipped:', e.message));
+  await dbRun(`CREATE INDEX IF NOT EXISTS idx_sessions_subject ON sessions (kind, subject_id)`).catch((e) => console.warn('[db] optional index skipped:', e.message));
 
   // Normalise KYC values written by earlier versions so a status can never "reset" on read
   await dbRun(`UPDATE clients SET kyc_status = 'APPROVED' WHERE UPPER(COALESCE(kyc_status,'')) IN ('VERIFIED','APPROVE')`);
