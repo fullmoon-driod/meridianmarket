@@ -274,8 +274,21 @@ async function initDatabase() {
   // Rows that pre-date the status column are history, not open requests, so they must never show up as pending
   // (approving one would credit the client a second time).
   const txHadStatus = (await dbAll(`PRAGMA table_info(transactions)`)).some((c) => c.name === 'status');
+  // Very old tables may lack the core columns altogether
+  const txCols = (await dbAll(`PRAGMA table_info(transactions)`)).map((c) => c.name);
+  const typeHad = txCols.includes('type');
+  await addColumn('transactions', 'type', 'TEXT');
+  await addColumn('transactions', 'client_id', 'INTEGER');
+  await addColumn('transactions', 'amount', 'REAL');
+  if (!typeHad) {
+    const alt = ['transaction_type', 'tx_type', 'kind', 'direction'].find((n) => txCols.includes(n));
+    if (alt) await dbRun(`UPDATE transactions SET type = UPPER(${alt}) WHERE type IS NULL`);
+    await dbRun(`UPDATE transactions SET type = 'DEPOSIT' WHERE type IS NULL OR type NOT IN ('DEPOSIT','WITHDRAWAL')`);
+  }
   await addColumn('transactions', 'status', 'TEXT');
   if (!txHadStatus) await dbRun(`UPDATE transactions SET status = 'APPROVED' WHERE status IS NULL`);
+  // rows whose kind (deposit / withdrawal) is unknown are kept as history only: they must never be approvable (wrong credit)
+  if (!typeHad) await dbRun(`UPDATE transactions SET status = 'APPROVED' WHERE status IS NULL OR status = 'PENDING'`);
   await addColumn('transactions', 'method', 'TEXT');
   await addColumn('transactions', 'tx_hash', 'TEXT');
   await addColumn('transactions', 'created_at', 'DATETIME');
@@ -406,7 +419,7 @@ dbReady.catch((e) => {
 });
 app.get('/api/health', (req, res) => {
   dbReady.then(
-    () => res.json({ ok: true, build: 'r4-cashier-diagnostics', db: 'ready', accounts: accountCache.size, openPositions: openPositions.length, uptimeSeconds: Math.round(process.uptime()), startedAt: new Date(Date.now() - process.uptime() * 1000).toISOString() }),
+    () => res.json({ ok: true, build: 'r5-tx-type-column', db: 'ready', accounts: accountCache.size, openPositions: openPositions.length, uptimeSeconds: Math.round(process.uptime()), startedAt: new Date(Date.now() - process.uptime() * 1000).toISOString() }),
     () => res.status(503).json({ ok: false, db: 'failed', reason: String((dbInitError && dbInitError.message) || 'unknown'), uptimeSeconds: Math.round(process.uptime()) }),
   );
 });
