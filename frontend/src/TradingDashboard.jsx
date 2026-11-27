@@ -1297,6 +1297,8 @@ export default function TradingDashboard() {
           .join(', ') +
         '.';
     }
+  } else if (feed.status === 'offline') {
+    feedHint = 'The browser cannot reach the trading server. If this stays for more than a few seconds, the server is down or restarting.';
   }
   const kycUi = KYC_UI[kycState.status] || KYC_UI.unverified;
   const kycBadge = kycUi.cls;

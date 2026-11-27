@@ -1110,7 +1110,11 @@ export default function AdminPortal() {
     try {
       const response = await apiFetch(API.clients);
       if (!response.ok) {
-        if (response.status !== 401) setSyncError(`Server returned ${response.status}`);
+        if (response.status !== 401) {
+          const body = await readJson(response);
+          const why = body.detail || body.reason || body.error || '';
+          setSyncError(`Server returned ${response.status}${why ? `: ${why}` : ''}`);
+        }
         return;
       }
       const data = await readJson(response);
@@ -2113,7 +2117,7 @@ export default function AdminPortal() {
       const res = await apiFetch(url, { method: 'DELETE' });
       const data = await readJson(res);
       if (!res.ok || !data.success) {
-        if (res.status !== 401) toast(`Delete failed: ${data.error || `server returned ${res.status}`}.`, 'bad');
+        if (res.status !== 401) toast(`Delete failed: ${data.error || `server returned ${res.status}`}${data.detail ? ` (${data.detail})` : ''}`, 'bad');
         return;
       }
       eventStampRef.current = Date.now(); // a poll already in flight still lists the deleted record: ignore it

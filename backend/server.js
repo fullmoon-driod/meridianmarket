@@ -392,16 +392,28 @@ async function initDatabase() {
 
   await fs.promises.mkdir(UPLOAD_DIR, { recursive: true });
   await dbRun(`DELETE FROM sessions WHERE expires_at < ?`, [Date.now()]);
-  await loadAccountState();
+  await loadAccountState().catch((e) => console.error('[db] could not load account state (continuing):', e));
   console.log('[db] schema ready');
 }
 setInterval(() => {
   if (db) dbRun(`DELETE FROM sessions WHERE expires_at < ?`, [Date.now()]).catch(() => {});
 }, 60 * 60 * 1000).unref();
 
+// Open https://your-site/api/health in a browser to see whether the database started (and why not, if it did not).
+let dbInitError = null;
+dbReady.catch((e) => {
+  dbInitError = e;
+});
+app.get('/api/health', (req, res) => {
+  dbReady.then(
+    () => res.json({ ok: true, db: 'ready', accounts: accountCache.size, openPositions: openPositions.length, uptimeSeconds: Math.round(process.uptime()), startedAt: new Date(Date.now() - process.uptime() * 1000).toISOString() }),
+    () => res.status(503).json({ ok: false, db: 'failed', reason: String((dbInitError && dbInitError.message) || 'unknown'), uptimeSeconds: Math.round(process.uptime()) }),
+  );
+});
+
 // Make sure no request is served before the schema exists
 app.use('/api', (req, res, next) => {
-  dbReady.then(() => next(), () => res.status(503).json({ success: false, error: 'Database unavailable.' }));
+  dbReady.then(() => next(), () => res.status(503).json({ success: false, error: 'Database unavailable.', reason: String((dbInitError && dbInitError.message) || '') }));
 });
 
 // ============================================================================
@@ -410,12 +422,29 @@ app.use('/api', (req, res, next) => {
 const accountCache = new Map(); // clientId -> { balance, bonus, agentId }
 let openPositions = []; // every OPEN position of every client (mirrors the `positions` table)
 
+const safeIso = (v) => {
+  if (!v) return new Date().toISOString();
+  const str = String(v);
+  const d = new Date(/[zZ]$|[+-]\d\d:?\d\d$/.test(str) ? str : `${str.replace(' ', 'T')}Z`);
+  return Number.isNaN(d.getTime()) ? new Date().toISOString() : d.toISOString();
+};
+const num = (v, fallback = 0) => (Number.isFinite(Number(v)) && v !== null && v !== '' ? Number(v) : fallback);
+
+// A damaged row must never stop the server from starting: bad rows are repaired in memory or skipped, and logged.
 async function loadAccountState() {
   accountCache.clear();
   (await dbAll(`SELECT id, balance, bonus, agent_id FROM clients`)).forEach((r) =>
-    accountCache.set(r.id, { balance: r.balance || 0, bonus: r.bonus || 0, agentId: r.agent_id }),
+    accountCache.set(r.id, { balance: num(r.balance), bonus: num(r.bonus), agentId: r.agent_id }),
   );
-  openPositions = (await dbAll(`SELECT * FROM positions WHERE status = 'OPEN'`)).map(rowToPosition);
+  const rows = await dbAll(`SELECT * FROM positions WHERE status = 'OPEN'`);
+  openPositions = [];
+  rows.forEach((r) => {
+    try {
+      openPositions.push(rowToPosition(r));
+    } catch (e) {
+      console.error(`[db] skipped unreadable position #${r && r.id}:`, e.message);
+    }
+  });
   console.log(`[db] loaded ${accountCache.size} accounts and ${openPositions.length} open positions`);
 }
 function rowToPosition(r) {
@@ -423,14 +452,14 @@ function rowToPosition(r) {
     id: r.id,
     clientId: r.client_id,
     symbol: r.symbol,
-    side: r.side,
-    volume: r.volume,
-    leverage: r.leverage,
-    openPrice: r.open_price,
-    margin: r.margin,
-    sl: r.sl || 0,
-    tp: r.tp || 0,
-    openedAt: r.opened_at ? new Date(String(r.opened_at).replace(' ', 'T') + (String(r.opened_at).includes('Z') ? '' : 'Z')).toISOString() : new Date().toISOString(),
+    side: String(r.side || 'BUY').toUpperCase() === 'SELL' ? 'SELL' : 'BUY',
+    volume: num(r.volume),
+    leverage: num(r.leverage, 1) || 1,
+    openPrice: num(r.open_price),
+    margin: num(r.margin),
+    sl: num(r.sl),
+    tp: num(r.tp),
+    openedAt: safeIso(r.opened_at),
     pnl: 0,
     currentPrice: null,
   };
@@ -1995,9 +2024,19 @@ async function deleteClientCascade(clientId, actor) {
   const files = await dbAll(`SELECT stored_name FROM kyc_documents WHERE client_id = ?`, [clientId]).catch(() => []);
   const plan = await clientDeletionPlan(clientId);
 
+  // Housekeeping deletes (child tables, sessions, audit rows) are best-effort: a missing table/column in an older
+  // database must not block the delete. Only the client row itself has to go, or the whole thing is rolled back.
+  const tolerant = async (tx, sql, params) => {
+    try {
+      await tx.run(sql, params);
+    } catch (e) {
+      if (/FOREIGN KEY|locked|busy|readonly|disk|corrupt/i.test(String(e && e.message))) throw e;
+      console.warn(`[delete-client] skipped step (${e.message}): ${sql.slice(0, 120)}`);
+    }
+  };
   const work = async (tx) => {
-    for (const step of plan) await tx.run(step.sql, step.params);
-    await tx.run(`DELETE FROM sessions WHERE kind = 'CLIENT' AND subject_id = ?`, [clientId]);
+    for (const step of plan) await tolerant(tx, step.sql, step.params);
+    await tolerant(tx, `DELETE FROM sessions WHERE kind = 'CLIENT' AND subject_id = ?`, [clientId]);
     const del = await tx.run(`DELETE FROM clients WHERE id = ?`, [clientId]);
     if (del.changes !== 1) throw new Error('The client row could not be deleted.');
     await tx.run(`INSERT INTO deleted_accounts_log (kind, subject_id, deleted_by) VALUES ('CLIENT', ?, ?)`, [clientId, actor]).catch(() => {});
@@ -2005,11 +2044,15 @@ async function deleteClientCascade(clientId, actor) {
   try {
     await withTx(work);
   } catch (e) {
-    if (!/FOREIGN KEY/i.test(String(e && e.message))) throw e;
-    // A table we could not see (a foreign key that points at one of the client's child tables) is in the way.
-    // Retry the same all-or-nothing transaction with enforcement off rather than leave the client undeletable.
-    console.warn('[delete-client] foreign key conflict, retrying with enforcement off:', e.message);
-    await withTx(work, { foreignKeys: false });
+    console.warn('[delete-client] first attempt failed:', e && e.message);
+    // A table we could not see (a foreign key that points at one of the client's child tables, a mismatched foreign
+    // key definition ...) is in the way. Retry the same all-or-nothing transaction with enforcement off.
+    try {
+      await withTx(work, { foreignKeys: false });
+    } catch (e2) {
+      console.error('[delete-client] failed:', e2);
+      throw new HttpError(500, `Could not delete the client: ${String((e2 && e2.message) || e2).slice(0, 200)}`);
+    }
   }
 
   // ---- committed: from here on nothing may throw ----
@@ -2495,10 +2538,13 @@ app.use((err, req, res, next) => {
   if (err instanceof HttpError) return res.status(err.status).json({ success: false, error: err.message });
   if (err && err.type === 'entity.too.large') return res.status(413).json({ success: false, error: 'Upload too large.' });
   if (err && err.type === 'entity.parse.failed') return res.status(400).json({ success: false, error: 'Malformed request body.' });
-  console.error('[api] unhandled error:', err);
-  res.status(500).json({ success: false, error: 'Internal server error.' });
+  console.error(`[api] unhandled error on ${req.method} ${req.originalUrl.split('?')[0]}:`, err);
+  const staffRoute = /^\/api\/(admin|crm)\//.test(req.path || req.originalUrl);
+  res.status(500).json({ success: false, error: 'Internal server error.', ...(staffRoute ? { detail: String((err && err.message) || err).slice(0, 300) } : {}) });
 });
 process.on('unhandledRejection', (e) => console.error('[process] unhandled rejection:', e));
+// One bad message / row must not take the whole trading server (and every client's feed) down with it.
+process.on('uncaughtException', (e) => console.error('[process] uncaught exception (server kept running):', e));
 
 const HTTPS_PORT = process.env.HTTPS_PORT || 443;
 server.listen(HTTPS_PORT, '0.0.0.0', () => {
