@@ -1796,10 +1796,36 @@ async function createCashierRequest(req, type) {
   }
   const method = cleanText(body.method || body.paymentMethod, 60) || (type === 'DEPOSIT' ? 'Crypto' : 'Bank Transfer');
   const reference = cleanText(body.txHash || body.reference, 200) || 'N/A';
-  const r = await dbRun(`INSERT INTO transactions (client_id, type, amount, status, method, tx_hash, details) VALUES (?, ?, ?, 'PENDING', ?, ?, ?)`, [clientId, type, amt, method, reference, details || null]);
+  let r;
+  try {
+    r = await dbRun(`INSERT INTO transactions (client_id, type, amount, status, method, tx_hash, details) VALUES (?, ?, ?, 'PENDING', ?, ?, ?)`, [clientId, type, amt, method, reference, details || null]);
+  } catch (e) {
+    // The table in an older database may have different columns / constraints: say exactly what is wrong, and try a minimal row.
+    console.error('[cashier] insert failed:', e.message);
+    try {
+      // fill any extra NOT NULL column an older table may carry (currency, network ...) with a neutral value
+      const cols = await dbAll(`PRAGMA table_info(transactions)`);
+      const names = ['client_id', 'type', 'amount', 'status'];
+      const vals = [clientId, type, amt, 'PENDING'];
+      cols.forEach((c) => {
+        if (c.pk || names.includes(c.name) || !c.notnull || c.dflt_value !== null) return;
+        names.push(c.name);
+        vals.push(/INT|REAL|NUM|FLOA|DOUB|DEC/i.test(c.type || '') ? 0 : /^currency$|^asset$|^coin$/i.test(c.name) ? 'USD' : '');
+      });
+      r = await dbRun(`INSERT INTO transactions (${names.map(quoteIdent).join(', ')}) VALUES (${names.map(() => '?').join(', ')})`, vals);
+      await dbRun(`UPDATE transactions SET method = ?, tx_hash = ?, details = ? WHERE id = ?`, [method, reference, details || null, r.lastID]).catch(() => {});
+    } catch (e2) {
+      console.error('[cashier] minimal insert failed too:', e2.message);
+      throw new HttpError(500, `Could not save the request (${e2.message}). Please contact support.`);
+    }
+  }
   logClientActivity(clientId, `${type}_REQUESTED`, { amount: amt, method, transactionId: r.lastID });
 
-  const tx = await loadTxWithClient(r.lastID);
+  let tx = await loadTxWithClient(r.lastID).catch((e) => {
+    console.error('[cashier] could not reload request:', e.message);
+    return null;
+  });
+  if (!tx) tx = { id: r.lastID, client_id: clientId, type, amount: amt, method, tx_hash: reference, details, status: 'PENDING', created_at: new Date().toISOString(), full_name: row.full_name, email: '', agent_name: '' };
   try {
     const stats = await pendingRequestStats();
     emitToAdmins({ type: 'TRANSACTION_REQUEST', transaction: publicTx(tx), ...stats, serverTime: Date.now() }); // instant notification in the CRM
