@@ -406,7 +406,7 @@ dbReady.catch((e) => {
 });
 app.get('/api/health', (req, res) => {
   dbReady.then(
-    () => res.json({ ok: true, db: 'ready', accounts: accountCache.size, openPositions: openPositions.length, uptimeSeconds: Math.round(process.uptime()), startedAt: new Date(Date.now() - process.uptime() * 1000).toISOString() }),
+    () => res.json({ ok: true, build: 'r4-cashier-diagnostics', db: 'ready', accounts: accountCache.size, openPositions: openPositions.length, uptimeSeconds: Math.round(process.uptime()), startedAt: new Date(Date.now() - process.uptime() * 1000).toISOString() }),
     () => res.status(503).json({ ok: false, db: 'failed', reason: String((dbInitError && dbInitError.message) || 'unknown'), uptimeSeconds: Math.round(process.uptime()) }),
   );
 });
@@ -1839,7 +1839,14 @@ const cashierHandler = (forcedType) =>
   wrap(async (req, res) => {
     const type = forcedType || String((req.body && req.body.type) || 'DEPOSIT').toUpperCase();
     if (!REQUEST_TYPES.includes(type)) throw new HttpError(400, 'Invalid transaction type.');
-    const tx = await createCashierRequest(req, type);
+    let tx;
+    try {
+      tx = await createCashierRequest(req, type);
+    } catch (e) {
+      if (e instanceof HttpError) throw e;
+      console.error(`[cashier] ${type} request failed:`, e);
+      throw new HttpError(500, `Could not submit the request: ${String((e && e.message) || e).slice(0, 200)}`);
+    }
     res.json({
       success: true,
       message: type === 'DEPOSIT' ? 'Deposit request submitted. It will be credited once the team confirms your payment.' : 'Withdrawal request submitted for review.',
