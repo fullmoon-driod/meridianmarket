@@ -155,6 +155,41 @@ const dbGet = (sql, params = []) => new Promise((resolve, reject) => db.get(sql,
 const dbAll = (sql, params = []) => new Promise((resolve, reject) => db.all(sql, params, (err, rows) => (err ? reject(err) : resolve(rows || []))));
 
 const dbPath = path.resolve(__dirname, 'meridian.db');
+
+// Runs several statements as ONE atomic unit: everything commits, or nothing does.
+// It uses its own short-lived connection, so requests that arrive while the transaction is open can never
+// slip their statements into it (the shared connection above has no isolation between concurrent requests).
+async function withTx(work, { foreignKeys = true } = {}) {
+  const conn = await new Promise((resolve, reject) => {
+    const c = new sqlite3.Database(dbPath, (err) => (err ? reject(err) : resolve(c)));
+  });
+  const tx = {
+    run: (sql, params = []) =>
+      new Promise((resolve, reject) => {
+        conn.run(sql, params, function (err) {
+          if (err) reject(err);
+          else resolve({ lastID: this.lastID, changes: this.changes });
+        });
+      }),
+    get: (sql, params = []) => new Promise((resolve, reject) => conn.get(sql, params, (err, row) => (err ? reject(err) : resolve(row)))),
+    all: (sql, params = []) => new Promise((resolve, reject) => conn.all(sql, params, (err, rows) => (err ? reject(err) : resolve(rows || [])))),
+  };
+  try {
+    await tx.run('PRAGMA busy_timeout = 8000');
+    await tx.run(`PRAGMA foreign_keys = ${foreignKeys ? 'ON' : 'OFF'}`);
+    await tx.run('BEGIN IMMEDIATE');
+    try {
+      const result = await work(tx);
+      await tx.run('COMMIT');
+      return result;
+    } catch (e) {
+      await tx.run('ROLLBACK').catch(() => {});
+      throw e;
+    }
+  } finally {
+    conn.close(() => {});
+  }
+}
 const dbReady = new Promise((resolve, reject) => {
   db = new sqlite3.Database(dbPath, (err) => {
     if (err) {
@@ -229,6 +264,13 @@ async function initDatabase() {
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE CASCADE
     )`);
+  // Review trail for deposit / withdrawal requests (who decided, when, and why)
+  await addColumn('transactions', 'details', 'TEXT'); // withdrawal payout details (account name / IBAN / wallet ...)
+  await addColumn('transactions', 'note', 'TEXT');
+  await addColumn('transactions', 'processed_by', 'TEXT');
+  await addColumn('transactions', 'processed_at', 'DATETIME');
+  await dbRun(`CREATE INDEX IF NOT EXISTS idx_tx_status ON transactions (status, id)`);
+  await dbRun(`CREATE INDEX IF NOT EXISTS idx_tx_client ON transactions (client_id)`);
   await dbRun(`
     CREATE TABLE IF NOT EXISTS client_logs (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -496,6 +538,13 @@ function emitToStaff(payload, agentId = null) {
   wss.clients.forEach((ws) => {
     if (!ws.ctx || ws.ctx.kind === 'CLIENT') return;
     if (ws.ctx.kind === 'ADMIN' || agentId === null || ws.ctx.id === agentId) sendJson(ws, text);
+  });
+}
+// Admin sockets only (deposit / withdrawal requests are reviewed by admins, agents never see them)
+function emitToAdmins(payload) {
+  const text = JSON.stringify(payload);
+  wss.clients.forEach((ws) => {
+    if (ws.ctx && ws.ctx.kind === 'ADMIN') sendJson(ws, text);
   });
 }
 function closeSockets(predicate, code, reason) {
@@ -1626,26 +1675,110 @@ app.post(
   }),
 );
 
-app.post(
-  '/api/cashier/deposit',
-  clientAuth(),
+// ---- Deposit / withdrawal requests --------------------------------------------------
+const REQUEST_TYPES = ['DEPOSIT', 'WITHDRAWAL'];
+const MAX_PENDING_PER_CLIENT = 10;
+const MAX_REQUEST_AMOUNT = 10000000;
+const isoOf = (v) => {
+  if (!v) return null;
+  const str = String(v);
+  const d = new Date(/[zZ]$|[+-]\d\d:?\d\d$/.test(str) ? str : `${str.replace(' ', 'T')}Z`); // SQLite CURRENT_TIMESTAMP is UTC without a zone
+  return Number.isNaN(d.getTime()) ? null : d.toISOString();
+};
+const publicTx = (t) => ({
+  id: t.id,
+  clientId: t.client_id,
+  type: t.type,
+  amount: round2(t.amount),
+  method: t.method || '',
+  reference: t.tx_hash && t.tx_hash !== 'N/A' ? t.tx_hash : '',
+  details: t.details || '',
+  status: t.status,
+  note: t.note || '',
+  processedBy: t.processed_by || '',
+  processedAt: isoOf(t.processed_at),
+  createdAt: isoOf(t.created_at),
+  ...(t.full_name !== undefined ? { clientName: t.full_name, clientEmail: t.email, agentName: t.agent_name || 'Unassigned' } : {}),
+});
+const TX_WITH_CLIENT = `SELECT t.*, c.full_name, c.email, COALESCE(a.name, 'Unassigned') AS agent_name
+  FROM transactions t JOIN clients c ON c.id = t.client_id LEFT JOIN crm_agents a ON a.id = c.agent_id`;
+const loadTxWithClient = (id) => dbGet(`${TX_WITH_CLIENT} WHERE t.id = ?`, [id]);
+const pendingRequestStats = async () => {
+  const rows = await dbAll(`SELECT type, COUNT(*) AS n, COALESCE(SUM(amount), 0) AS total FROM transactions WHERE status = 'PENDING' AND type IN ('DEPOSIT','WITHDRAWAL') GROUP BY type`);
+  const stat = { pendingCount: 0, pendingDeposits: 0, pendingWithdrawals: 0, pendingDepositTotal: 0, pendingWithdrawalTotal: 0 };
+  rows.forEach((r) => {
+    stat.pendingCount += r.n;
+    if (r.type === 'DEPOSIT') {
+      stat.pendingDeposits = r.n;
+      stat.pendingDepositTotal = round2(r.total);
+    } else {
+      stat.pendingWithdrawals = r.n;
+      stat.pendingWithdrawalTotal = round2(r.total);
+    }
+  });
+  return stat;
+};
+
+async function createCashierRequest(req, type) {
+  const body = req.body || {};
+  const amt = round2(parseFloat(body.amount));
+  if (!Number.isFinite(amt) || amt <= 0) throw new HttpError(400, 'Please enter a valid amount.');
+  if (amt > MAX_REQUEST_AMOUNT) throw new HttpError(400, 'That amount is above the allowed limit.');
+  const clientId = req.clientId;
+  const row = await dbGet(`SELECT id, full_name, balance, agent_id FROM clients WHERE id = ?`, [clientId]);
+  if (!row) throw new HttpError(404, 'Client not found.');
+  const pending = await dbGet(`SELECT COUNT(*) AS n, COALESCE(SUM(CASE WHEN type = 'WITHDRAWAL' THEN amount ELSE 0 END), 0) AS w FROM transactions WHERE client_id = ? AND status = 'PENDING'`, [clientId]);
+  if (pending.n >= MAX_PENDING_PER_CLIENT) throw new HttpError(429, 'You already have several requests waiting for review. Please wait for them to be processed.');
+
+  let details = '';
+  if (type === 'WITHDRAWAL') {
+    const summary = accountSummary(clientId) || summarize(clientId, row.balance, 0);
+    // What can actually leave the account: never more than the balance, never margin that open positions need,
+    // and not money that is already promised to another pending withdrawal.
+    const available = Math.max(0, round2(Math.min(row.balance || 0, summary.freeMargin) - pending.w));
+    if (amt > available + 1e-9) throw new HttpError(400, `Insufficient available balance. You can withdraw up to $${available.toFixed(2)} right now.`);
+    const accountName = cleanText(body.accountName, 120);
+    const payout = cleanText(body.paymentDetails, 400);
+    if (!payout) throw new HttpError(400, 'Please enter where the funds should be sent.');
+    details = [accountName && `Account holder: ${accountName}`, payout].filter(Boolean).join(' | ');
+  }
+  const method = cleanText(body.method || body.paymentMethod, 60) || (type === 'DEPOSIT' ? 'Crypto' : 'Bank Transfer');
+  const reference = cleanText(body.txHash || body.reference, 200) || 'N/A';
+  const r = await dbRun(`INSERT INTO transactions (client_id, type, amount, status, method, tx_hash, details) VALUES (?, ?, ?, 'PENDING', ?, ?, ?)`, [clientId, type, amt, method, reference, details || null]);
+  logClientActivity(clientId, `${type}_REQUESTED`, { amount: amt, method, transactionId: r.lastID });
+
+  const tx = await loadTxWithClient(r.lastID);
+  try {
+    const stats = await pendingRequestStats();
+    emitToAdmins({ type: 'TRANSACTION_REQUEST', transaction: publicTx(tx), ...stats, serverTime: Date.now() }); // instant notification in the CRM
+    emitToClient(clientId, { type: 'TRANSACTION_UPDATE', clientId, transaction: publicTx(tx), serverTime: Date.now() });
+  } catch (e) {
+    console.error('[cashier] notification failed:', e.message);
+  }
+  return tx;
+}
+const cashierHandler = (forcedType) =>
   wrap(async (req, res) => {
-    const { amount, method, txHash, type } = req.body || {};
-    const transactionType = String(type || 'DEPOSIT').toUpperCase();
-    const amt = parseFloat(amount);
-    if (!['DEPOSIT', 'WITHDRAWAL'].includes(transactionType) || !Number.isFinite(amt) || amt <= 0) throw new HttpError(400, 'Invalid transaction parameters.');
-    const r = await dbRun(`INSERT INTO transactions (client_id, type, amount, status, method, tx_hash) VALUES (?, ?, ?, 'PENDING', ?, ?)`, [
-      req.clientId,
-      transactionType,
-      amt,
-      cleanText(method, 60) || 'Crypto',
-      cleanText(txHash, 200) || 'N/A',
-    ]);
-    logClientActivity(req.clientId, `${transactionType}_REQUESTED`, { amount: amt, method, txHash });
-    notifyStaffRefresh('TRANSACTION_REQUESTED', req.clientId);
-    res.json({ success: true, message: 'Request submitted for CRM approval.', transactionId: r.lastID });
-  }),
-);
+    const type = forcedType || String((req.body && req.body.type) || 'DEPOSIT').toUpperCase();
+    if (!REQUEST_TYPES.includes(type)) throw new HttpError(400, 'Invalid transaction type.');
+    const tx = await createCashierRequest(req, type);
+    res.json({
+      success: true,
+      message: type === 'DEPOSIT' ? 'Deposit request submitted. It will be credited once the team confirms your payment.' : 'Withdrawal request submitted for review.',
+      transactionId: tx.id,
+      transaction: publicTx(tx),
+    });
+  });
+app.post('/api/cashier/deposit', clientAuth(), cashierHandler(null)); // `type` in the body may still say WITHDRAWAL (older clients)
+app.post('/api/cashier/withdraw', clientAuth(), cashierHandler('WITHDRAWAL'));
+
+// The client's own requests (newest first) with their current status
+const handleMyTransactions = wrap(async (req, res) => {
+  const rows = await dbAll(`SELECT * FROM transactions WHERE client_id = ? AND type IN ('DEPOSIT','WITHDRAWAL') ORDER BY id DESC LIMIT 30`, [req.clientId]);
+  res.json({ success: true, transactions: rows.map(publicTx) });
+});
+app.get('/api/client/transactions', clientAuth(), handleMyTransactions);
+app.get('/api/client/transactions/:clientId', clientAuth(), handleMyTransactions);
 
 // ============================================================================
 // CRM / ADMIN ENDPOINTS  (every one requires a staff session; agents are scoped to their own clients)
@@ -1791,24 +1924,84 @@ app.post(
 );
 
 // ---- Permanent deletion ----------------------------------------------------------
+// Every table that stores something about a client, at any depth. Discovered from the live schema (tables with a
+// foreign key into `clients`, tables that reference those, and any table with a plain client_id column), so extra
+// tables in an older or customised database are cleaned up too instead of blocking the delete with
+// "FOREIGN KEY constraint failed". Returns DELETE statements ordered deepest-first.
+const quoteIdent = (name) => `"${String(name).replace(/"/g, '""')}"`;
+async function clientDeletionPlan(clientId) {
+  const names = (await dbAll(`SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'`)).map((r) => r.name);
+  const schema = new Map();
+  for (const name of names) {
+    const q = quoteIdent(name);
+    const fks = await dbAll(`PRAGMA foreign_key_list(${q})`);
+    const cols = await dbAll(`PRAGMA table_info(${q})`);
+    const pk = cols.find((c) => c.pk === 1);
+    schema.set(name.toLowerCase(), { name, fks, hasClientId: cols.some((c) => c.name === 'client_id'), pk: pk ? pk.name : 'rowid' });
+  }
+  const steps = []; // parents are pushed before their children, so we run it in reverse
+  const visit = (parentKey, parentWhere, chain) => {
+    for (const [key, t] of schema) {
+      if (chain.includes(key) || key === 'clients') continue;
+      for (const fk of t.fks.filter((f) => String(f.table).toLowerCase() === parentKey)) {
+        const parent = schema.get(parentKey);
+        const target = fk.to || parent.pk;
+        const where = `${quoteIdent(fk.from)} IN (SELECT ${quoteIdent(target)} FROM ${quoteIdent(parent.name)} WHERE ${parentWhere})`;
+        steps.push(`DELETE FROM ${quoteIdent(t.name)} WHERE ${where}`);
+        visit(key, where, [...chain, key]);
+      }
+    }
+  };
+  visit('clients', 'id = ?', ['clients']);
+  // tables that only carry a client_id column (no declared foreign key)
+  for (const [key, t] of schema) {
+    if (key === 'clients' || !t.hasClientId) continue;
+    if (t.fks.some((f) => String(f.table).toLowerCase() === 'clients')) continue;
+    steps.push(`DELETE FROM ${quoteIdent(t.name)} WHERE ${quoteIdent('client_id')} = ?`);
+  }
+  // every statement has exactly one `?` per occurrence of the root condition: count them for the params
+  return steps.reverse().map((sql) => ({ sql, params: Array(sql.split('?').length - 1).fill(clientId) }));
+}
+
+// Permanently removes a client and everything attached to it. All-or-nothing: if any step fails the database is left
+// exactly as it was (no half-deleted client). Everything after the commit is best-effort and can never turn a
+// successful delete into an error response.
 async function deleteClientCascade(clientId, actor) {
   const client = await dbGet(`SELECT id FROM clients WHERE id = ?`, [clientId]);
-  if (!client) throw new HttpError(404, 'Client not found.');
-  const files = await dbAll(`SELECT stored_name FROM kyc_documents WHERE client_id = ?`, [clientId]);
-  openPositions = openPositions.filter((p) => p.clientId !== clientId); // stop marking their positions immediately
-  // Children first (explicit, so cleanup never depends on foreign_keys being enabled for an old schema)
-  for (const table of ['kyc_documents', 'positions', 'transactions', 'client_logs', 'password_resets']) {
-    await dbRun(`DELETE FROM ${table} WHERE client_id = ?`, [clientId]);
+  if (!client) return { alreadyDeleted: true }; // deleting twice is not an error: the goal state has been reached
+  const files = await dbAll(`SELECT stored_name FROM kyc_documents WHERE client_id = ?`, [clientId]).catch(() => []);
+  const plan = await clientDeletionPlan(clientId);
+
+  const work = async (tx) => {
+    for (const step of plan) await tx.run(step.sql, step.params);
+    await tx.run(`DELETE FROM sessions WHERE kind = 'CLIENT' AND subject_id = ?`, [clientId]);
+    const del = await tx.run(`DELETE FROM clients WHERE id = ?`, [clientId]);
+    if (del.changes !== 1) throw new Error('The client row could not be deleted.');
+    await tx.run(`INSERT INTO deleted_accounts_log (kind, subject_id, deleted_by) VALUES ('CLIENT', ?, ?)`, [clientId, actor]).catch(() => {});
+  };
+  try {
+    await withTx(work);
+  } catch (e) {
+    if (!/FOREIGN KEY/i.test(String(e && e.message))) throw e;
+    // A table we could not see (a foreign key that points at one of the client's child tables) is in the way.
+    // Retry the same all-or-nothing transaction with enforcement off rather than leave the client undeletable.
+    console.warn('[delete-client] foreign key conflict, retrying with enforcement off:', e.message);
+    await withTx(work, { foreignKeys: false });
   }
-  await dbRun(`DELETE FROM sessions WHERE kind = 'CLIENT' AND subject_id = ?`, [clientId]);
-  const del = await dbRun(`DELETE FROM clients WHERE id = ?`, [clientId]);
-  if (del.changes !== 1) throw new HttpError(500, 'Failed to delete client.');
-  await Promise.all(files.map((f) => fs.promises.unlink(path.join(UPLOAD_DIR, path.basename(f.stored_name))).catch(() => {})));
-  accountCache.delete(clientId);
-  await dbRun(`INSERT INTO deleted_accounts_log (kind, subject_id, deleted_by) VALUES ('CLIENT', ?, ?)`, [clientId, actor]);
-  emitToClient(clientId, { type: 'ACCOUNT_DELETED', clientId });
-  closeSockets((c) => c.kind === 'CLIENT' && c.id === clientId, 4001, 'account deleted');
-  notifyStaffRefresh('CLIENT_DELETED', clientId);
+
+  // ---- committed: from here on nothing may throw ----
+  try {
+    openPositions = openPositions.filter((p) => p.clientId !== clientId); // stop marking their positions
+    accountCache.delete(clientId);
+    await Promise.all(files.map((f) => fs.promises.unlink(path.join(UPLOAD_DIR, path.basename(f.stored_name))).catch(() => {})));
+    emitToClient(clientId, { type: 'ACCOUNT_DELETED', clientId });
+    closeSockets((c) => c.kind === 'CLIENT' && c.id === clientId, 4001, 'account deleted');
+    notifyStaffRefresh('CLIENT_DELETED', clientId);
+    emitToAdmins({ type: 'TRANSACTIONS_CHANGED', serverTime: Date.now() }); // their pending requests vanished with them
+  } catch (e) {
+    console.error('[delete-client] post-delete cleanup:', e);
+  }
+  return { alreadyDeleted: false };
 }
 app.delete(
   '/api/admin/clients/:clientId',
@@ -1816,8 +2009,8 @@ app.delete(
   wrap(async (req, res) => {
     const id = parseClientId(req.params.clientId);
     if (!id) throw new HttpError(400, 'Invalid client ID.');
-    await deleteClientCascade(id, req.auth.name);
-    res.json({ success: true, message: 'Client and all related data permanently deleted.' });
+    const r = await deleteClientCascade(id, req.auth.name);
+    res.json({ success: true, alreadyDeleted: r.alreadyDeleted, message: r.alreadyDeleted ? 'This client was already removed.' : 'Client and all related data permanently deleted.' });
   }),
 );
 app.post(
@@ -1826,8 +2019,8 @@ app.post(
   wrap(async (req, res) => {
     const id = parseClientId(req.body && req.body.clientId);
     if (!id) throw new HttpError(400, 'Invalid client ID.');
-    await deleteClientCascade(id, req.auth.name);
-    res.json({ success: true, message: 'Client and all related data permanently deleted.' });
+    const r = await deleteClientCascade(id, req.auth.name);
+    res.json({ success: true, alreadyDeleted: r.alreadyDeleted, message: r.alreadyDeleted ? 'This client was already removed.' : 'Client and all related data permanently deleted.' });
   }),
 );
 
@@ -1897,37 +2090,90 @@ app.get(
   }),
 );
 
-// ---- Transactions -----------------------------------------------------------------
+// ---- Transactions: review queue + approval workflow (admin only) --------------------------------
+// One call gives the whole screen: what is waiting, what was decided recently, and the headline numbers.
+app.get(
+  '/api/admin/transactions',
+  staffAuth(['ADMIN']),
+  wrap(async (req, res) => {
+    const pending = await dbAll(`${TX_WITH_CLIENT} WHERE t.status = 'PENDING' AND t.type IN ('DEPOSIT','WITHDRAWAL') ORDER BY t.id ASC`);
+    const history = await dbAll(`${TX_WITH_CLIENT} WHERE t.status <> 'PENDING' AND t.type IN ('DEPOSIT','WITHDRAWAL') ORDER BY COALESCE(t.processed_at, t.created_at) DESC, t.id DESC LIMIT 150`);
+    res.json({ success: true, pending: pending.map(publicTx), history: history.map(publicTx), ...(await pendingRequestStats()), serverTime: Date.now() });
+  }),
+);
+// Kept for older CRM builds: same rows, original response shape
 app.get(
   '/api/admin/pending-transactions',
   staffAuth(['ADMIN']),
   wrap(async (req, res) => {
-    const rows = await dbAll(
-      `SELECT t.id, t.client_id, t.type, t.amount, t.method, t.tx_hash, t.status, t.created_at, c.full_name, c.email
-       FROM transactions t JOIN clients c ON t.client_id = c.id WHERE t.status = 'PENDING' ORDER BY t.id DESC`,
-    );
-    res.json({ transactions: rows });
+    const rows = await dbAll(`${TX_WITH_CLIENT} WHERE t.status = 'PENDING' ORDER BY t.id DESC`);
+    res.json({ transactions: rows.map((t) => ({ ...t, ...publicTx(t) })) });
   }),
 );
-app.post(
-  '/api/admin/approve-transaction',
-  staffAuth(['ADMIN']),
-  wrap(async (req, res) => {
-    const { transactionId, status } = req.body || {};
-    if (!transactionId || !['APPROVED', 'REJECTED'].includes(status)) throw new HttpError(400, 'Invalid transaction approval parameters.');
-    const tx = await dbGet(`SELECT * FROM transactions WHERE id = ?`, [transactionId]);
-    if (!tx) throw new HttpError(404, 'Transaction not found.');
-    const upd = await dbRun(`UPDATE transactions SET status = ? WHERE id = ? AND status = 'PENDING'`, [status, transactionId]);
-    if (upd.changes !== 1) throw new HttpError(400, 'Transaction already processed.');
-    if (status === 'APPROVED') {
-      const delta = tx.type === 'WITHDRAWAL' ? -Math.abs(tx.amount) : Math.abs(tx.amount);
-      await dbRun(`UPDATE clients SET balance = MAX(0, ROUND(COALESCE(balance,0) + ?, 2)) WHERE id = ?`, [delta, tx.client_id]);
-      await refreshAccount(tx.client_id);
+
+// Decide a request. The decision, the balance change and the review trail are ONE atomic transaction:
+//   APPROVED deposit    -> balance + amount
+//   APPROVED withdrawal -> balance - amount (refused if the client no longer has that much)
+//   REJECTED            -> balance untouched
+async function processTransaction(transactionId, decision, note, actor) {
+  const { t, newBalance } = await withTx(async (tx) => {
+    const row = await tx.get(`SELECT * FROM transactions WHERE id = ?`, [transactionId]);
+    if (!row) throw new HttpError(404, 'Transaction not found.');
+    if (!REQUEST_TYPES.includes(row.type)) throw new HttpError(400, 'Only deposit and withdrawal requests can be reviewed.');
+    if (row.status !== 'PENDING') throw new HttpError(409, `This request was already ${String(row.status).toLowerCase()}.`);
+    const client = await tx.get(`SELECT id, balance FROM clients WHERE id = ?`, [row.client_id]);
+    if (!client) throw new HttpError(404, 'The client for this request no longer exists.');
+    let balance = round2(client.balance || 0);
+    if (decision === 'APPROVED') {
+      const amount = round2(row.amount);
+      if (row.type === 'WITHDRAWAL') {
+        if (balance + 1e-9 < amount) {
+          throw new HttpError(409, `Cannot approve: the client's balance ($${balance.toFixed(2)}) is lower than the withdrawal ($${amount.toFixed(2)}). Reject the request or adjust the balance first.`);
+        }
+        balance = round2(balance - amount);
+      } else {
+        balance = round2(balance + amount);
+      }
+      await tx.run(`UPDATE clients SET balance = ? WHERE id = ?`, [balance, client.id]);
     }
-    logClientActivity(tx.client_id, `TRANSACTION_${status}`, { transactionId, amount: tx.amount, type: tx.type, by: req.auth.name });
-    res.json({ success: true, message: `Transaction ${status.toLowerCase()} successfully.` });
-  }),
-);
+    const upd = await tx.run(`UPDATE transactions SET status = ?, note = ?, processed_by = ?, processed_at = ? WHERE id = ? AND status = 'PENDING'`, [
+      decision,
+      cleanText(note, 300) || null,
+      actor,
+      new Date().toISOString(),
+      transactionId,
+    ]);
+    if (upd.changes !== 1) throw new HttpError(409, 'This request was already processed.'); // lost a race with another admin: roll everything back
+    return { t: row, newBalance: balance };
+  });
+
+  // Committed. Push the new numbers; a failure here must not report a failed approval for money that has moved.
+  let tx = null;
+  try {
+    if (decision === 'APPROVED') await refreshAccount(t.client_id); // BALANCE_UPDATE to the client and to staff, instantly
+    tx = await loadTxWithClient(transactionId);
+    const pub = publicTx(tx);
+    emitToClient(t.client_id, { type: 'TRANSACTION_UPDATE', clientId: t.client_id, transaction: pub, balance: newBalance, serverTime: Date.now() });
+    emitToAdmins({ type: 'TRANSACTION_PROCESSED', transaction: pub, ...(await pendingRequestStats()), serverTime: Date.now() });
+    logClientActivity(t.client_id, `${t.type}_${decision}`, { transactionId, amount: t.amount, by: actor });
+  } catch (e) {
+    console.error('[transactions] post-commit notification failed:', e.message);
+  }
+  return { transaction: tx ? publicTx(tx) : null, balance: newBalance };
+}
+const decisionHandler = (forced) =>
+  wrap(async (req, res) => {
+    const body = req.body || {};
+    const id = parseInt(body.transactionId ?? body.id, 10);
+    const raw = String(forced || body.status || body.decision || body.action || '').trim().toUpperCase();
+    const decision = ['APPROVED', 'APPROVE'].includes(raw) ? 'APPROVED' : ['REJECTED', 'REJECT', 'DECLINED', 'DECLINE'].includes(raw) ? 'REJECTED' : null;
+    if (!Number.isInteger(id) || id <= 0 || !decision) throw new HttpError(400, 'Invalid transaction approval parameters.');
+    const out = await processTransaction(id, decision, body.note, req.auth.name);
+    const verb = decision === 'APPROVED' ? 'approved' : 'rejected';
+    res.json({ success: true, message: `Transaction ${verb} successfully.`, status: decision, ...out });
+  });
+app.post('/api/admin/approve-transaction', staffAuth(['ADMIN']), decisionHandler(null)); // body.status = APPROVED | REJECTED
+app.post('/api/admin/reject-transaction', staffAuth(['ADMIN']), decisionHandler('REJECTED'));
 
 // ---- Manual balance / bonus adjustment (admin only) --------------------------------
 const handleBalanceAdjustment = wrap(async (req, res) => {

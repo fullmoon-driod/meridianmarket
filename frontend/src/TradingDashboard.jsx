@@ -266,6 +266,46 @@ const BTN_PRIMARY = 'td-primary font-bold text-white rounded-xl transition';
 const BTN_GHOST =
   'bg-white hover:bg-blue-50 border border-slate-200 hover:border-blue-300 text-slate-700 hover:text-blue-700 font-bold rounded-xl transition';
 const fmtUSD = (n) => `$${Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+// The client's own deposit / withdrawal requests and where each one stands
+function CashRequests({ items }) {
+  if (!items || items.length === 0) return null;
+  const meta = {
+    PENDING: { label: 'Pending review', cls: 'bg-amber-50 text-amber-700 border-amber-200' },
+    APPROVED: { label: 'Approved', cls: 'bg-emerald-50 text-emerald-700 border-emerald-200' },
+    REJECTED: { label: 'Rejected', cls: 'bg-rose-50 text-rose-700 border-rose-200' },
+  };
+  return (
+    <div className="td-panel rounded-3xl p-5 sm:p-6 max-w-2xl mx-auto">
+      <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2 pb-3 mb-1 border-b border-slate-200">
+        <Clock className="w-4 h-4 text-blue-600" />
+        <span>Your recent requests</span>
+      </h3>
+      <ul className="divide-y divide-slate-100">
+        {items.slice(0, 8).map((t) => {
+          const m = meta[t.status] || meta.PENDING;
+          const dep = t.type === 'DEPOSIT';
+          return (
+            <li key={t.id} className="py-3 flex items-center gap-3">
+              <span className={`p-2 rounded-xl border ${dep ? 'bg-emerald-50 border-emerald-200 text-emerald-700' : 'bg-blue-50 border-blue-200 text-blue-700'}`}>
+                {dep ? <Wallet className="w-4 h-4" /> : <ArrowUpRight className="w-4 h-4" />}
+              </span>
+              <div className="min-w-0 flex-1">
+                <div className="text-sm font-bold text-slate-900">
+                  {dep ? 'Deposit' : 'Withdrawal'} <span className="td-num">{fmtUSD(t.amount)}</span>
+                </div>
+                <div className="text-[11px] text-slate-500 truncate">
+                  {t.method || '—'} · {t.createdAt ? new Date(t.createdAt).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : ''}
+                  {t.status === 'REJECTED' && t.note ? ` · ${t.note}` : ''}
+                </div>
+              </div>
+              <span className={`text-[11px] font-bold px-2.5 py-1 rounded-full border whitespace-nowrap ${m.cls}`}>{m.label}</span>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+}
 function TerminalStyles() {
   return (
     <style>{`
@@ -783,6 +823,10 @@ export default function TradingDashboard() {
   const [accountError, setAccountError] = useState('');
   const [mustChangePassword, setMustChangePassword] = useState(false);
   const [tradeBusy, setTradeBusy] = useState(false);
+  // Deposit / withdrawal requests: the server is the source of truth (status changes arrive as pushed events)
+  const [txList, setTxList] = useState([]);
+  const [cashBusy, setCashBusy] = useState(false);
+  const [cashError, setCashError] = useState('');
   const [closingId, setClosingId] = useState(null);
   const marginUsed = useMemo(() => round2(positionsState.reduce((sum, p) => sum + (Number(p.margin) || 0), 0)), [positionsState]);
   const accountKeyRef = useRef(null);
@@ -828,6 +872,10 @@ export default function TradingDashboard() {
       documentType: prev.fullName || prev.idNumber ? prev.documentType : k.kyc_doc_type || prev.documentType,
     }));
   };
+  const upsertTx = (tx) => {
+    if (!tx || !tx.id) return;
+    setTxList((prev) => [tx, ...prev.filter((t) => t.id !== tx.id)].sort((a, b) => b.id - a.id).slice(0, 30));
+  };
   const sessionEnded = () => {
     try {
       localStorage.removeItem('current_user');
@@ -846,6 +894,18 @@ export default function TradingDashboard() {
       setBalanceUSD(Number(msg.balance) || 0);
       setBonusUSD(Number(msg.bonus) || 0);
       mirrorSession(Number(msg.balance) || 0);
+    } else if (msg.type === 'TRANSACTION_UPDATE' && msg.transaction) {
+      const t = msg.transaction;
+      upsertTx(t);
+      if (t.status === 'APPROVED') {
+        showToast(
+          t.type === 'DEPOSIT' ? `Your deposit of ${fmtUSD(t.amount)} was approved and credited to your balance.` : `Your withdrawal of ${fmtUSD(t.amount)} was approved and deducted from your balance.`,
+          'ok',
+          6000
+        );
+      } else if (t.status === 'REJECTED') {
+        showToast(`Your ${t.type === 'DEPOSIT' ? 'deposit' : 'withdrawal'} of ${fmtUSD(t.amount)} was rejected${t.note ? `: ${t.note}` : '.'}`, 'error', 7000);
+      }
     } else if (msg.type === 'POSITIONS_UPDATE') {
       setPositionsState((msg.positions || []).map(toPosition));
     } else if (msg.type === 'KYC_UPDATE') {
@@ -871,6 +931,7 @@ export default function TradingDashboard() {
       setBalanceUSD(0);
       setBonusUSD(0);
       setPositionsState([]);
+      setTxList([]);
       setKycState({ status: 'unverified', fullName: '', idNumber: '', documentType: 'Passport', note: '' });
     }
     sessionRef.current = { token: loginToken, clientId: loginId };
@@ -886,6 +947,9 @@ export default function TradingDashboard() {
         setPositionsState((data.positions || []).map(toPosition));
         setAccountKey(String(loginId));
         setAccountError('');
+        apiCall('GET', '/api/client/transactions', { token: loginToken })
+          .then((d) => alive && setTxList(Array.isArray(d.transactions) ? d.transactions : []))
+          .catch(() => {});
       } catch (e) {
         if (!alive) return;
         if (e.status === 401 || e.status === 403 || e.status === 404) handlersRef.current.sessionEnded();
@@ -990,9 +1054,11 @@ export default function TradingDashboard() {
     setActiveTab(key);
     setAccountMenuOpen(false);
   };
-  const showToast = (msg, tone = 'ok') => {
-    setToast({ msg, tone, id: Date.now() });
-    setTimeout(() => setToast(null), tone === 'error' ? 4200 : 2600);
+  const showToast = (msg, tone = 'ok', ms) => {
+    const dur = ms || (tone === 'error' ? 4200 : 2600);
+    const id = Date.now();
+    setToast({ msg, tone, id, ms: dur });
+    setTimeout(() => setToast((cur) => (cur && cur.id === id ? null : cur)), dur);
   };
   // Orders are filled by the SERVER at the live bid/ask; the screen only shows what it confirmed.
   const handleExecuteTrade = async (type) => {
@@ -1060,22 +1126,57 @@ export default function TradingDashboard() {
       setTimeout(() => setCopied(false), 2000);
     }
   };
+  // What can leave the account right now: never more than the balance, never margin that open positions need,
+  // and not money already promised to another pending withdrawal (the server applies the same rule).
+  const pendingWithdrawTotal = txList.filter((t) => t.status === 'PENDING' && t.type === 'WITHDRAWAL').reduce((sum, t) => sum + (Number(t.amount) || 0), 0);
+  const availableToWithdraw = Math.max(0, round2(Math.min(balanceUSD, equityUSD - marginUsed) - pendingWithdrawTotal));
+  const submitCashRequest = async (path, body, okMessage, onDone) => {
+    if (cashBusy) return;
+    const { token, clientId } = sessionRef.current;
+    if (!clientId) {
+      setCashError('Please sign in again.');
+      return;
+    }
+    setCashBusy(true);
+    setCashError('');
+    try {
+      const data = await apiCall('POST', path, { token, body: { clientId, ...body } });
+      upsertTx(data.transaction);
+      onDone();
+      showToast(okMessage, 'ok', 5000);
+    } catch (err) {
+      if (err.status === 401 || err.status === 403) return sessionEnded();
+      setCashError(err.message || 'Could not submit the request. Please try again.');
+    } finally {
+      setCashBusy(false);
+    }
+  };
+  useEffect(() => {
+    setCashError('');
+  }, [isDepositOpen, isWithdrawOpen, activeTab]);
   const handleDepositSubmit = (e) => {
     e.preventDefault();
     const amt = parseFloat(depositAmountUsdt) || 0;
-    if (amt <= 0) return alert('Please enter a valid deposit amount.');
-    setIsDepositOpen(false);
-    setDepositAmountUsdt('');
-    alert(`Deposit request of $${amt.toLocaleString()} (${selectedDepositMethod}) submitted!\n\nStatus: Pending Admin CRM Verification.`);
+    if (amt <= 0) return setCashError('Please enter a valid deposit amount.');
+    submitCashRequest('/api/cashier/deposit', { type: 'DEPOSIT', amount: amt, method: selectedDepositMethod }, `Deposit request of ${fmtUSD(amt)} submitted. It will be credited once our team confirms your payment.`, () => {
+      setIsDepositOpen(false);
+      setDepositAmountUsdt('');
+    });
   };
   const handleWithdrawSubmit = (e) => {
     e.preventDefault();
     const amt = parseFloat(withdrawForm.amount) || 0;
-    if (amt <= 0) return alert('Please enter a valid withdrawal amount.');
-    if (amt > balanceUSD) return alert('Insufficient balance for this withdrawal request.');
-    setIsWithdrawOpen(false);
-    setWithdrawForm({ accountName: '', amount: '', paymentMethod: 'Bank Transfer', paymentDetails: '' });
-    alert(`Withdrawal request of $${amt.toLocaleString()} submitted successfully!\n\nStatus: Pending Processing.`);
+    if (amt <= 0) return setCashError('Please enter a valid withdrawal amount.');
+    if (amt > availableToWithdraw + 1e-9) return setCashError(`You can withdraw up to ${fmtUSD(availableToWithdraw)} right now.`);
+    submitCashRequest(
+      '/api/cashier/withdraw',
+      { amount: amt, accountName: withdrawForm.accountName, paymentMethod: withdrawForm.paymentMethod, paymentDetails: withdrawForm.paymentDetails },
+      `Withdrawal request of ${fmtUSD(amt)} submitted for review.`,
+      () => {
+        setIsWithdrawOpen(false);
+        setWithdrawForm({ accountName: '', amount: '', paymentMethod: 'Bank Transfer', paymentDetails: '' });
+      }
+    );
   };
   const handleKycSubmit = async (e) => {
     e.preventDefault();
@@ -1277,7 +1378,10 @@ export default function TradingDashboard() {
             <span className="text-blue-700 font-extrabold">{fmtUSD(equityUSD)}</span>
           </div>
           <button
-            onClick={() => setIsWithdrawOpen(true)}
+            onClick={() => {
+              setCashError('');
+              setIsWithdrawOpen(true);
+            }}
             className={`${BTN_GHOST} px-3 sm:px-4 py-2 text-xs flex items-center gap-1.5`}
             title="Withdraw"
           >
@@ -1986,6 +2090,8 @@ export default function TradingDashboard() {
                     type="number"
                     required
                     placeholder="e.g. 500"
+                    min="1"
+                    step="any"
                     value={depositAmountUsdt}
                     onChange={(e) => setDepositAmountUsdt(e.target.value)}
                     className={`${FIELD} td-num py-3.5`}
@@ -2003,11 +2109,17 @@ export default function TradingDashboard() {
                     </button>
                   ))}
                 </div>
-                <button type="submit" className={`${BTN_PRIMARY} w-full py-4 text-sm mt-2`}>
-                  Submit Deposit Request
+                {cashError && !isDepositOpen && (
+                  <div role="alert" className="text-xs font-semibold text-rose-700 bg-rose-50 border border-rose-200 rounded-xl px-3 py-2.5">
+                    {cashError}
+                  </div>
+                )}
+                <button type="submit" disabled={cashBusy} className={`${BTN_PRIMARY} w-full py-4 text-sm mt-2 disabled:opacity-60 disabled:cursor-not-allowed`}>
+                  {cashBusy ? 'Submitting…' : 'Submit Deposit Request'}
                 </button>
               </form>
             </div>
+            <CashRequests items={txList} />
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 max-w-2xl mx-auto">
               {CRYPTO_WALLETS.map((wallet) => (
                 <div
@@ -2233,14 +2345,15 @@ export default function TradingDashboard() {
       </main>
       {/* TRADE TOAST */}
       {toast && (
-        <div className="fixed inset-x-0 bottom-24 md:bottom-8 z-50 flex justify-center px-4 pointer-events-none">
+        <div className="fixed inset-x-0 bottom-24 md:bottom-8 z-[80] flex justify-center px-4 pointer-events-none">
           <div
             key={toast.id}
-            className={`td-toast ${toast.tone === 'error' ? 'bg-rose-700' : 'bg-slate-900'} text-white text-xs font-semibold td-num px-4 py-3 rounded-xl shadow-xl flex items-center gap-2 max-w-full`}
+            style={{ animationDuration: `${toast.ms || 2600}ms` }}
+            className={`td-toast ${toast.tone === 'error' ? 'bg-rose-700' : 'bg-slate-900'} text-white text-xs font-semibold td-num px-4 py-3 rounded-xl shadow-xl flex items-center gap-2 max-w-full sm:max-w-lg`}
             role="status"
           >
             {toast.tone === 'error' ? <AlertCircle className="w-4 h-4 text-white shrink-0" /> : <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />}
-            <span className="truncate">{toast.msg}</span>
+            <span className="break-words leading-snug">{toast.msg}</span>
           </div>
         </div>
       )}
@@ -2351,8 +2464,13 @@ export default function TradingDashboard() {
                     className={`${FIELD} td-num`}
                   />
                 </div>
-                <button type="submit" className={`${BTN_PRIMARY} w-full py-3.5 text-sm`}>
-                  Submit Deposit Request
+                {cashError && (
+                  <div role="alert" className="text-xs font-semibold text-rose-700 bg-rose-50 border border-rose-200 rounded-xl px-3 py-2.5">
+                    {cashError}
+                  </div>
+                )}
+                <button type="submit" disabled={cashBusy} className={`${BTN_PRIMARY} w-full py-3.5 text-sm disabled:opacity-60 disabled:cursor-not-allowed`}>
+                  {cashBusy ? 'Submitting…' : 'Submit Deposit Request'}
                 </button>
               </form>
             </div>
@@ -2376,6 +2494,19 @@ export default function TradingDashboard() {
               </button>
             </div>
             <form onSubmit={handleWithdrawSubmit} className="space-y-4">
+              <div className="td-inset rounded-2xl p-3.5 flex items-center justify-between gap-3">
+                <div>
+                  <div className="text-[11px] text-slate-500 uppercase tracking-wide font-semibold">Available to withdraw</div>
+                  <div className="td-num text-lg font-extrabold text-slate-900">{fmtUSD(availableToWithdraw)}</div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setWithdrawForm({ ...withdrawForm, amount: availableToWithdraw > 0 ? String(availableToWithdraw) : '' })}
+                  className="px-3 py-1.5 bg-white hover:bg-blue-50 border border-slate-200 hover:border-blue-300 text-slate-700 hover:text-blue-700 rounded-lg text-[11px] font-bold transition"
+                >
+                  Max
+                </button>
+              </div>
               <div>
                 <label className={LABEL}>Account Name</label>
                 <input
@@ -2421,8 +2552,16 @@ export default function TradingDashboard() {
                   className={FIELD}
                 />
               </div>
-              <button type="submit" className={`${BTN_PRIMARY} w-full py-3.5 text-sm`}>
-                Submit Withdrawal Request
+              {pendingWithdrawTotal > 0 && (
+                <div className="text-[11px] text-slate-500">{fmtUSD(pendingWithdrawTotal)} is already reserved by a pending withdrawal.</div>
+              )}
+              {cashError && (
+                <div role="alert" className="text-xs font-semibold text-rose-700 bg-rose-50 border border-rose-200 rounded-xl px-3 py-2.5">
+                  {cashError}
+                </div>
+              )}
+              <button type="submit" disabled={cashBusy} className={`${BTN_PRIMARY} w-full py-3.5 text-sm disabled:opacity-60 disabled:cursor-not-allowed`}>
+                {cashBusy ? 'Submitting…' : 'Submit Withdrawal Request'}
               </button>
             </form>
           </div>

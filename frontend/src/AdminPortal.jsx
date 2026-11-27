@@ -33,7 +33,16 @@ import {
   Trash2,
   Key,
   Briefcase,
-  TrendingUp
+  TrendingUp,
+  Bell,
+  BellRing,
+  Banknote,
+  ArrowDownLeft,
+  ArrowUpRight,
+  Receipt,
+  Volume2,
+  VolumeX,
+  Inbox
 } from 'lucide-react';
 
 /* =====================================================================
@@ -54,6 +63,8 @@ const API = {
   deleteClient: (dbId) => `/api/admin/clients/${dbId}`,
   deleteAgent: (id) => `/api/admin/agents/${id}`,
   resetPassword: '/api/admin/reset-client-password',
+  transactions: '/api/admin/transactions',
+  reviewTransaction: '/api/admin/approve-transaction',
   // ---- KYC / messaging / dialer ----
   kycReview: '/api/crm/kyc/review',
   waMessages: '/api/crm/whatsapp/messages',
@@ -195,74 +206,86 @@ const CALL_STATUS_META = {
    STYLE SYSTEM (scoped to .mx-root)
    ===================================================================== */
 const STYLES = `
-@import url('https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500;600&display=swap');
-.mx-root{--bg:#070a11;--panel:#0d121c;--raised:#131a27;--line:rgba(148,163,184,.12);--line-strong:rgba(148,163,184,.24);
-  --text:#e8ecf4;--muted:#8d97ab;--faint:#5d6779;--accent:#7c9cff;--accent-ink:#0a1020;--ok:#34d399;--warn:#f5b53d;--bad:#fb7185;--wa:#25d366;
-  font-family:'Geist',ui-sans-serif,system-ui,-apple-system,'Segoe UI',sans-serif;color:var(--text);
-  background:radial-gradient(1100px 520px at 85% -8%,rgba(124,156,255,.09),transparent 60%),radial-gradient(800px 400px at -5% 110%,rgba(52,211,153,.05),transparent 60%),var(--bg);
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
+/* Full-bleed page: neutralise any framework default that narrows or centres #root (same reset the trading dashboard uses) */
+html,body,#root,#__next{margin:0!important;padding:0!important;width:100%!important;max-width:none!important;min-height:100%;border:0!important;display:block!important;text-align:left!important;background:#F4F7FB}
+body{overflow-x:hidden}
+.mx-root{--bg:#F4F7FB;--panel:#FFFFFF;--raised:#F8FAFC;--line:#E2E8F0;--line-strong:#CBD5E1;
+  --text:#0F172A;--ink:#0F172A;--muted:#64748B;--faint:#94A3B8;--accent:#2563EB;--accent-dark:#1D4ED8;--accent-soft:#EFF6FF;--accent-line:#BFDBFE;--accent-ink:#FFFFFF;
+  --ok:#059669;--warn:#B45309;--bad:#E11D48;--wa:#25D366;
+  width:100%;max-width:none;margin:0;border:0;
+  font-family:'Inter',ui-sans-serif,system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;color:var(--text);background:var(--bg);
   -webkit-font-smoothing:antialiased}
-.mx-root *{scrollbar-width:thin;scrollbar-color:#263149 transparent}
+.mx-root *{scrollbar-width:thin;scrollbar-color:rgba(100,116,139,.35) transparent}
 .mx-root button{cursor:pointer}
-.mx-num{font-family:'Geist Mono',ui-monospace,SFMono-Regular,Menlo,monospace;font-variant-numeric:tabular-nums}
-.mx-card{background:linear-gradient(180deg,rgba(255,255,255,.028),rgba(255,255,255,.008)),var(--panel);border:1px solid var(--line);border-radius:16px}
-.mx-field{width:100%;background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:.6rem .8rem;font-size:.875rem;color:var(--text);outline:none;transition:border-color .15s,box-shadow .15s}
-.mx-field::placeholder{color:var(--faint)}
-.mx-field:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(124,156,255,.18)}
+.mx-num{font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,Menlo,monospace;font-variant-numeric:tabular-nums}
+.mx-card{background:#fff;border:1px solid var(--line);border-radius:16px;box-shadow:0 1px 2px rgba(15,23,42,.04),0 10px 28px -14px rgba(30,64,175,.16)}
+.mx-field{width:100%;background:#fff;border:1px solid var(--line-strong);border-radius:12px;padding:.6rem .8rem;font-size:.875rem;color:var(--ink);outline:none;transition:border-color .15s,box-shadow .15s}
+.mx-field::placeholder{color:#94A3B8}
+.mx-field:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(37,99,235,.16)}
 select.mx-field{padding-right:1.6rem}
-.mx-label{display:block;font-size:.6875rem;font-weight:600;letter-spacing:.07em;text-transform:uppercase;color:var(--muted);margin-bottom:.4rem}
-.mx-eyebrow{font-size:.6875rem;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
-.mx-btn{display:inline-flex;align-items:center;justify-content:center;gap:.5rem;border-radius:10px;padding:.55rem .95rem;font-size:.8125rem;font-weight:600;border:1px solid var(--line-strong);background:var(--raised);color:var(--text);transition:all .15s;white-space:nowrap}
-.mx-btn:hover:not(:disabled){border-color:rgba(148,163,184,.45);background:#19233a}
-.mx-btn:disabled{opacity:.45;cursor:not-allowed}
+.mx-label{display:block;font-size:.6875rem;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:#475569;margin-bottom:.4rem}
+.mx-eyebrow{font-size:.6875rem;font-weight:600;letter-spacing:.07em;text-transform:uppercase;color:var(--muted)}
+.mx-btn{display:inline-flex;align-items:center;justify-content:center;gap:.5rem;border-radius:12px;padding:.55rem .95rem;font-size:.8125rem;font-weight:700;border:1px solid var(--line);background:#fff;color:#334155;transition:all .15s;white-space:nowrap}
+.mx-btn:hover:not(:disabled){border-color:var(--accent-line);background:var(--accent-soft);color:var(--accent-dark)}
+.mx-btn:disabled{opacity:.5;cursor:not-allowed}
 .mx-btn:focus-visible,.mx-icon-btn:focus-visible,.mx-nav:focus-visible,.mx-key:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
-.mx-btn-primary{background:var(--accent);border-color:transparent;color:var(--accent-ink)}
-.mx-btn-primary:hover:not(:disabled){background:#a0b7ff}
-.mx-btn-ok{background:rgba(52,211,153,.14);border-color:rgba(52,211,153,.4);color:#6ee7b7}
-.mx-btn-ok:hover:not(:disabled){background:rgba(52,211,153,.24);border-color:rgba(52,211,153,.6)}
-.mx-btn-bad{background:rgba(251,113,133,.12);border-color:rgba(251,113,133,.4);color:#fda4af}
-.mx-btn-bad:hover:not(:disabled){background:rgba(251,113,133,.22);border-color:rgba(251,113,133,.6)}
-.mx-btn-sm{padding:.35rem .65rem;font-size:.75rem;border-radius:8px}
-.mx-icon-btn{width:30px;height:30px;display:inline-flex;align-items:center;justify-content:center;border-radius:9px;border:1px solid var(--line);background:var(--raised);color:var(--muted);transition:.15s;flex-shrink:0}
-.mx-icon-btn:hover:not(:disabled){color:var(--text);border-color:var(--line-strong)}
-.mx-icon-btn:disabled{opacity:.35;cursor:not-allowed}
-.mx-icon-btn.call:hover:not(:disabled){color:var(--ok);border-color:rgba(52,211,153,.45);background:rgba(52,211,153,.1)}
-.mx-icon-btn.wa:hover:not(:disabled){color:var(--wa);border-color:rgba(37,211,102,.45);background:rgba(37,211,102,.1)}
-.mx-icon-btn.ok{color:var(--ok);border-color:rgba(52,211,153,.35)}
-.mx-icon-btn.bad{color:var(--bad);border-color:rgba(251,113,133,.35)}
-.mx-badge{display:inline-flex;align-items:center;gap:.3rem;border-radius:999px;padding:.15rem .6rem;font-size:.6875rem;font-weight:600;border:1px solid transparent;white-space:nowrap}
-.mx-b-warn{color:var(--warn);background:rgba(245,181,61,.1);border-color:rgba(245,181,61,.28)}
-.mx-b-ok{color:var(--ok);background:rgba(52,211,153,.1);border-color:rgba(52,211,153,.28)}
-.mx-b-bad{color:var(--bad);background:rgba(251,113,133,.1);border-color:rgba(251,113,133,.28)}
-.mx-b-accent{color:#b3c4ff;background:rgba(124,156,255,.12);border-color:rgba(124,156,255,.3)}
-.mx-b-neutral{color:var(--muted);background:rgba(148,163,184,.08);border-color:var(--line)}
-.mx-nav{display:flex;align-items:center;gap:.7rem;width:100%;padding:.6rem .75rem;border-radius:10px;font-size:.875rem;font-weight:500;color:var(--muted);border:1px solid transparent;background:transparent;transition:.15s;text-align:left}
-.mx-nav:hover{color:var(--text);background:rgba(255,255,255,.04)}
-.mx-nav.active{color:#d4deff;background:rgba(124,156,255,.12);border-color:rgba(124,156,255,.22)}
-.mx-nav-count{margin-left:auto;font-size:.6875rem;font-weight:600;padding:.05rem .45rem;border-radius:999px;background:rgba(148,163,184,.12);color:var(--muted)}
-.mx-nav-count.warn{background:rgba(245,181,61,.16);color:var(--warn)}
-.mx-th{padding:.75rem 1.25rem;font-size:.6875rem;font-weight:600;letter-spacing:.07em;text-transform:uppercase;color:var(--muted);text-align:left;white-space:nowrap}
+.mx-btn-primary{background:linear-gradient(96deg,#2563EB,#1D4ED8);border-color:transparent;color:#fff;box-shadow:0 8px 18px -10px rgba(37,99,235,.75)}
+.mx-btn-primary:hover:not(:disabled){background:linear-gradient(96deg,#2563EB,#1D4ED8);border-color:transparent;color:#fff;filter:brightness(1.08)}
+.mx-btn-ok{background:#ECFDF5;border-color:#A7F3D0;color:#047857}
+.mx-btn-ok:hover:not(:disabled){background:#D1FAE5;border-color:#6EE7B7;color:#065F46}
+.mx-btn-bad{background:#FFF1F2;border-color:#FECDD3;color:#BE123C}
+.mx-btn-bad:hover:not(:disabled){background:#FFE4E6;border-color:#FDA4AF;color:#9F1239}
+.mx-btn-sm{padding:.35rem .65rem;font-size:.75rem;border-radius:10px}
+.mx-icon-btn{width:30px;height:30px;display:inline-flex;align-items:center;justify-content:center;border-radius:10px;border:1px solid var(--line);background:#fff;color:#64748B;transition:.15s;flex-shrink:0}
+.mx-icon-btn:hover:not(:disabled){color:var(--accent-dark);border-color:var(--accent-line);background:var(--accent-soft)}
+.mx-icon-btn:disabled{opacity:.4;cursor:not-allowed}
+.mx-icon-btn.call:hover:not(:disabled){color:#047857;border-color:#A7F3D0;background:#ECFDF5}
+.mx-icon-btn.wa:hover:not(:disabled){color:#128C7E;border-color:#A7F3D0;background:#ECFDF5}
+.mx-icon-btn.ok{color:#047857;border-color:#A7F3D0;background:#ECFDF5}
+.mx-icon-btn.bad{color:#BE123C;border-color:#FECDD3;background:#FFF1F2}
+.mx-badge{display:inline-flex;align-items:center;gap:.3rem;border-radius:999px;padding:.15rem .6rem;font-size:.6875rem;font-weight:700;border:1px solid transparent;white-space:nowrap}
+.mx-b-warn{color:#B45309;background:#FFFBEB;border-color:#FDE68A}
+.mx-b-ok{color:#047857;background:#ECFDF5;border-color:#A7F3D0}
+.mx-b-bad{color:#BE123C;background:#FFF1F2;border-color:#FECDD3}
+.mx-b-accent{color:#1D4ED8;background:#EFF6FF;border-color:#BFDBFE}
+.mx-b-neutral{color:#475569;background:#F1F5F9;border-color:#E2E8F0}
+.mx-nav{display:flex;align-items:center;gap:.7rem;width:100%;padding:.6rem .75rem;border-radius:12px;font-size:.875rem;font-weight:600;color:#475569;border:1px solid transparent;background:transparent;transition:.15s;text-align:left}
+.mx-nav:hover{color:var(--accent-dark);background:var(--accent-soft)}
+.mx-nav.active{color:#fff;background:var(--accent);box-shadow:0 8px 16px -8px rgba(37,99,235,.55);font-weight:700}
+.mx-nav-count{margin-left:auto;font-size:.6875rem;font-weight:700;padding:.05rem .45rem;border-radius:999px;background:#E2E8F0;color:#475569}
+.mx-nav-count.warn{background:#FEF3C7;color:#B45309}
+.mx-nav.active .mx-nav-count{background:rgba(255,255,255,.25);color:#fff}
+.mx-th{padding:.75rem 1.25rem;font-size:.6875rem;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#64748B;text-align:left;white-space:nowrap}
 .mx-td{padding:.9rem 1.25rem;vertical-align:middle}
-.mx-row{transition:background .12s}
-.mx-row:hover{background:rgba(255,255,255,.028)}
-.mx-chip{border:1px solid var(--line);background:transparent;color:var(--muted);border-radius:999px;padding:.3rem .8rem;font-size:.75rem;font-weight:600;transition:.15s;display:inline-flex;gap:.4rem;align-items:center}
-.mx-chip:hover{color:var(--text);border-color:var(--line-strong)}
-.mx-chip.on{background:rgba(124,156,255,.14);border-color:rgba(124,156,255,.4);color:#cbd8ff}
-.mx-key{height:56px;border-radius:14px;background:var(--raised);border:1px solid var(--line);color:var(--text);font-size:1.25rem;font-weight:500;display:flex;flex-direction:column;align-items:center;justify-content:center;line-height:1;transition:.1s}
-.mx-key:hover{background:#1b2640;border-color:var(--line-strong)}
+.mx-row{transition:background .15s}
+.mx-row:hover{background:var(--accent-soft)}
+.mx-chip{border:1px solid var(--line);background:#fff;color:#475569;border-radius:999px;padding:.3rem .8rem;font-size:.75rem;font-weight:700;transition:.15s;display:inline-flex;gap:.4rem;align-items:center}
+.mx-chip:hover{color:var(--accent-dark);border-color:var(--accent-line);background:var(--accent-soft)}
+.mx-chip.on{background:var(--accent);border-color:var(--accent);color:#fff}
+.mx-key{height:56px;border-radius:14px;background:#F8FAFC;border:1px solid var(--line);color:var(--ink);font-size:1.25rem;font-weight:500;display:flex;flex-direction:column;align-items:center;justify-content:center;line-height:1;transition:.1s}
+.mx-key:hover{background:var(--accent-soft);border-color:var(--accent-line)}
 .mx-key:active{transform:scale(.96)}
 .mx-key small{font-size:.5625rem;letter-spacing:.14em;color:var(--faint);margin-top:3px;font-weight:600;height:9px}
-.mx-bubble-out{background:rgba(37,211,102,.14);border:1px solid rgba(37,211,102,.28);border-radius:14px 14px 4px 14px}
-.mx-bubble-in{background:var(--raised);border:1px solid var(--line);border-radius:14px 14px 14px 4px}
+.mx-bubble-out{background:#DCFCE7;border:1px solid #BBF7D0;border-radius:14px 14px 4px 14px}
+.mx-bubble-in{background:#F1F5F9;border:1px solid var(--line);border-radius:14px 14px 14px 4px}
 .mx-divider{height:1px;background:var(--line)}
+.mx-kpi{display:flex;flex-direction:column;align-items:center;justify-content:flex-start;text-align:center}
+.mx-kpi .mx-eyebrow{display:flex;align-items:center;justify-content:center;text-align:center}
+@media (max-width:1699px){.mx-kpi .mx-eyebrow{min-height:2.3em}}
 @keyframes mx-pulse{0%,100%{opacity:1}50%{opacity:.35}}
-@keyframes mx-ring{0%{box-shadow:0 0 0 0 rgba(52,211,153,.5)}100%{box-shadow:0 0 0 14px rgba(52,211,153,0)}}
+@keyframes mx-ring{0%{box-shadow:0 0 0 0 rgba(5,150,105,.45)}100%{box-shadow:0 0 0 14px rgba(5,150,105,0)}}
+@keyframes mx-bell{0%,100%{transform:rotate(0)}15%{transform:rotate(14deg)}30%{transform:rotate(-12deg)}45%{transform:rotate(8deg)}60%{transform:rotate(-6deg)}75%{transform:rotate(0)}}
 @keyframes mx-in-right{from{transform:translateX(24px);opacity:0}to{transform:none;opacity:1}}
 @keyframes mx-in-up{from{transform:translateY(10px);opacity:0}to{transform:none;opacity:1}}
+@keyframes mx-flash{0%{background-color:#DBEAFE}100%{background-color:transparent}}
 .mx-pulse{animation:mx-pulse 1.4s ease-in-out infinite}
 .mx-ring{animation:mx-ring 1.4s ease-out infinite}
+.mx-bell{animation:mx-bell .9s ease-in-out 2}
 .mx-in-right{animation:mx-in-right .22s ease-out}
 .mx-in-up{animation:mx-in-up .2s ease-out}
-@media (prefers-reduced-motion:reduce){.mx-pulse,.mx-ring,.mx-in-right,.mx-in-up{animation:none}}
+.mx-new{animation:mx-flash 2.4s ease-out}
+@media (prefers-reduced-motion:reduce){.mx-pulse,.mx-ring,.mx-bell,.mx-in-right,.mx-in-up,.mx-new{animation:none}}
 `;
 
 /* =====================================================================
@@ -277,9 +300,9 @@ function Avatar({ name, size = 36 }) {
         width: size,
         height: size,
         fontSize: size * 0.36,
-        background: `hsl(${h} 38% 22%)`,
-        color: `hsl(${h} 75% 82%)`,
-        border: `1px solid hsl(${h} 40% 34%)`
+        background: `hsl(${h} 85% 94%)`,
+        color: `hsl(${h} 60% 32%)`,
+        border: `1px solid hsl(${h} 70% 82%)`
       }}
       aria-hidden="true"
     >
@@ -299,13 +322,69 @@ function KycBadge({ status }) {
   );
 }
 
-function StatCard({ label, value, tone = 'text-white', hint, children }) {
+const timeAgo = (v) => {
+  const t = new Date(v).getTime();
+  if (!t) return '—';
+  const sec = Math.max(0, Math.round((Date.now() - t) / 1000));
+  if (sec < 45) return 'just now';
+  const min = Math.round(sec / 60);
+  if (min < 60) return `${min} min ago`;
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return `${hr} h ago`;
+  return `${Math.floor(hr / 24)} d ago`;
+};
+// Short two-tone chime for new cash requests (browsers only allow sound after the user has clicked the page once)
+const playPing = () => {
+  try {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return;
+    const ctx = new AC();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    const t0 = ctx.currentTime;
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(880, t0);
+    osc.frequency.setValueAtTime(1175, t0 + 0.13);
+    gain.gain.setValueAtTime(0.0001, t0);
+    gain.gain.exponentialRampToValueAtTime(0.16, t0 + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.42);
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start(t0);
+    osc.stop(t0 + 0.44);
+    setTimeout(() => ctx.close().catch(() => {}), 700);
+  } catch {
+    /* audio unavailable */
+  }
+};
+function TxTypeBadge({ type }) {
+  const dep = type === 'DEPOSIT';
+  const Icon = dep ? ArrowDownLeft : ArrowUpRight;
   return (
-    <div className="mx-card p-5">
+    <span className={`mx-badge ${dep ? 'mx-b-ok' : 'mx-b-warn'}`}>
+      <Icon className="w-3 h-3" />
+      {dep ? 'Deposit' : 'Withdrawal'}
+    </span>
+  );
+}
+function TxStatusBadge({ status }) {
+  const m = status === 'APPROVED' ? ['mx-b-ok', 'Approved'] : status === 'REJECTED' ? ['mx-b-bad', 'Rejected'] : ['mx-b-warn', 'Pending'];
+  return <span className={`mx-badge ${m[0]}`}>{m[1]}</span>;
+}
+
+function StatCard({ label, value, tone = 'text-[var(--ink)]', hint, children, onClick }) {
+  return (
+    <div
+      className={`mx-card mx-kpi p-5 w-full ${onClick ? 'cursor-pointer hover:border-[var(--accent-line)] transition' : ''}`}
+      onClick={onClick}
+      role={onClick ? 'button' : undefined}
+      tabIndex={onClick ? 0 : undefined}
+      onKeyDown={onClick ? (e) => (e.key === 'Enter' || e.key === ' ') && onClick() : undefined}
+    >
       <div className="mx-eyebrow">{label}</div>
-      <div className={`mx-num text-[1.65rem] font-semibold mt-2 leading-none ${tone}`}>{value}</div>
+      <div className={`mx-num text-[1.65rem] font-extrabold mt-2 leading-none ${tone}`}>{value}</div>
       {hint && <div className="text-xs text-[var(--muted)] mt-2">{hint}</div>}
-      {children}
+      {children && <div className="w-full">{children}</div>}
     </div>
   );
 }
@@ -314,7 +393,7 @@ function PageHeader({ title, subtitle, children }) {
   return (
     <div className="flex flex-wrap items-end justify-between gap-4 mb-6">
       <div>
-        <h2 className="text-2xl font-semibold tracking-tight text-white">{title}</h2>
+        <h2 className="text-2xl font-semibold tracking-tight text-[var(--ink)]">{title}</h2>
         {subtitle && <p className="text-sm text-[var(--muted)] mt-1">{subtitle}</p>}
       </div>
       {children}
@@ -328,7 +407,7 @@ function EmptyState({ icon: Icon = Info, title, text }) {
       <div className="inline-flex p-3 rounded-2xl bg-[var(--raised)] border border-[var(--line)] mb-3">
         <Icon className="w-5 h-5 text-[var(--muted)]" />
       </div>
-      <div className="text-sm font-medium text-white">{title}</div>
+      <div className="text-sm font-medium text-[var(--ink)]">{title}</div>
       {text && <div className="text-xs text-[var(--muted)] mt-1 max-w-xs mx-auto">{text}</div>}
     </div>
   );
@@ -393,7 +472,7 @@ function KycPanel({ client, onReview, onRetry, onPreview }) {
           <KycBadge status={status} />
           {client.kycReviewedBy && (
             <span className="text-xs text-[var(--muted)]">
-              Reviewed by <span className="text-white">{client.kycReviewedBy}</span>
+              Reviewed by <span className="text-[var(--ink)]">{client.kycReviewedBy}</span>
               {client.kycReviewedAt ? ` · ${fmtDateTime(client.kycReviewedAt)}` : ''}
             </span>
           )}
@@ -408,7 +487,7 @@ function KycPanel({ client, onReview, onRetry, onPreview }) {
       {status === 'REJECTED' && client.kycNote && (
         <div className="rounded-xl border border-[rgba(251,113,133,.3)] bg-[rgba(251,113,133,.07)] p-3.5">
           <div className="mx-eyebrow !text-[var(--bad)] mb-1">Rejection note</div>
-          <p className="text-sm text-slate-200 whitespace-pre-wrap">{client.kycNote}</p>
+          <p className="text-sm text-slate-700 whitespace-pre-wrap">{client.kycNote}</p>
         </div>
       )}
 
@@ -418,15 +497,15 @@ function KycPanel({ client, onReview, onRetry, onPreview }) {
           <dl className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-sm">
             <div>
               <dt className="text-[11px] text-[var(--muted)]">Full legal name</dt>
-              <dd className="text-white break-words">{client.kycFullName || '—'}</dd>
+              <dd className="text-[var(--ink)] break-words">{client.kycFullName || '—'}</dd>
             </div>
             <div>
               <dt className="text-[11px] text-[var(--muted)]">Document type</dt>
-              <dd className="text-white">{client.kycDocType || '—'}</dd>
+              <dd className="text-[var(--ink)]">{client.kycDocType || '—'}</dd>
             </div>
             <div>
               <dt className="text-[11px] text-[var(--muted)]">Document number</dt>
-              <dd className="text-white mx-num break-all">{client.kycIdNumber || '—'}</dd>
+              <dd className="text-[var(--ink)] mx-num break-all">{client.kycIdNumber || '—'}</dd>
             </div>
           </dl>
           {client.kycSubmittedAt && <div className="text-[11px] text-[var(--muted)] mt-2">Submitted {fmtDateTime(String(client.kycSubmittedAt).replace(' ', 'T') + 'Z')}</div>}
@@ -438,7 +517,7 @@ function KycPanel({ client, onReview, onRetry, onPreview }) {
         {docs.length === 0 ? (
           <div className="rounded-xl border border-dashed border-[var(--line-strong)] p-6 text-center">
             <FileText className="w-5 h-5 text-[var(--muted)] mx-auto mb-2" />
-            <div className="text-sm text-white">No documents attached to this record</div>
+            <div className="text-sm text-[var(--ink)]">No documents attached to this record</div>
             <div className="text-xs text-[var(--muted)] mt-1">
               Documents appear here once the client uploads ID through the platform.
             </div>
@@ -456,7 +535,7 @@ function KycPanel({ client, onReview, onRetry, onPreview }) {
                   <div className="aspect-[4/3] bg-[var(--raised)] overflow-hidden">
                     <img src={d.url} alt={`${d.type} for ${client.name}`} loading="lazy" className="w-full h-full object-cover group-hover:scale-105 transition duration-300" />
                   </div>
-                  <div className="px-3 py-2 text-xs font-medium text-white truncate">{d.type}</div>
+                  <div className="px-3 py-2 text-xs font-medium text-[var(--ink)] truncate">{d.type}</div>
                 </button>
               ) : (
                 <a
@@ -467,7 +546,7 @@ function KycPanel({ client, onReview, onRetry, onPreview }) {
                   className="rounded-xl border border-[var(--line)] bg-[var(--bg)] hover:border-[var(--accent)] transition p-4 flex flex-col items-center justify-center gap-2 text-center aspect-[4/3]"
                 >
                   <FileText className="w-6 h-6 text-[var(--accent)]" />
-                  <span className="text-xs font-medium text-white truncate max-w-full">{d.type}</span>
+                  <span className="text-xs font-medium text-[var(--ink)] truncate max-w-full">{d.type}</span>
                   <span className="text-[10px] text-[var(--muted)] flex items-center gap-1">
                     Open <ExternalLink className="w-3 h-3" />
                   </span>
@@ -567,7 +646,7 @@ function ChatPane({ client, messages, online, agentName, onSend, onRetry, onVoic
       <div className="flex items-center gap-3 px-4 py-3 border-b border-[var(--line)]">
         <Avatar name={client.name} size={36} />
         <div className="min-w-0 flex-1">
-          <div className="text-sm font-semibold text-white truncate">{client.name}</div>
+          <div className="text-sm font-semibold text-[var(--ink)] truncate">{client.name}</div>
           <div className="text-xs text-[var(--muted)] flex items-center gap-1.5">
             <span className="mx-num">{client.phone}</span>
             <span
@@ -613,7 +692,7 @@ function ChatPane({ client, messages, online, agentName, onSend, onRetry, onVoic
           messages.map((m) => (
             <div key={m.id} className={`flex ${m.dir === 'out' ? 'justify-end' : 'justify-start'}`}>
               <div className={`max-w-[78%] px-3.5 py-2 ${m.dir === 'out' ? 'mx-bubble-out' : 'mx-bubble-in'}`}>
-                <p className="text-sm text-slate-100 whitespace-pre-wrap break-words">{m.text}</p>
+                <p className="text-sm text-[var(--ink)] whitespace-pre-wrap break-words">{m.text}</p>
                 <div className="flex items-center justify-end gap-2 mt-1 text-[10px] text-[var(--muted)]">
                   <span>{fmtClock(m.ts)}</span>
                   {m.dir === 'out' && (
@@ -731,7 +810,7 @@ function SoftPhone({ number, setNumber, session, onCall, onHangup, onDtmf, onClo
             <PhoneCall className="w-4 h-4 text-[var(--ok)]" />
           </div>
           <div>
-            <div className="text-sm font-semibold text-white leading-none">Fonitel Dialer</div>
+            <div className="text-sm font-semibold text-[var(--ink)] leading-none">Fonitel Dialer</div>
             <div className="text-[11px] text-[var(--muted)] mt-1">VoIP softphone</div>
           </div>
         </div>
@@ -755,7 +834,7 @@ function SoftPhone({ number, setNumber, session, onCall, onHangup, onDtmf, onClo
             placeholder="Enter number"
             inputMode="tel"
             aria-label="Phone number"
-            className="mx-num w-full bg-transparent text-xl font-medium text-white outline-none placeholder:text-[var(--faint)]"
+            className="mx-num w-full bg-transparent text-xl font-medium text-[var(--ink)] outline-none placeholder:text-[var(--faint)]"
           />
           {!live && number && (
             <button type="button" className="mx-icon-btn" onClick={() => setNumber((n) => n.slice(0, -1))} aria-label="Backspace">
@@ -894,6 +973,9 @@ export default function AdminPortal() {
     setCurrentUser(null);
     setClients([]);
     setPortfolio({});
+    setTxData({ pending: [], history: [] });
+    seenTxRef.current = null;
+    setBellOpen(false);
     localStorage.removeItem('meridian_crm_auth');
     setProfileClientId('');
     setNavOpen(false);
@@ -982,6 +1064,31 @@ export default function AdminPortal() {
   const [pfSearch, setPfSearch] = useState('');
   const [pfOnlyOpen, setPfOnlyOpen] = useState(false);
   const [pfExpanded, setPfExpanded] = useState({});
+
+  // ---- Deposit / withdrawal requests (admin) ----
+  const [txData, setTxData] = useState({ pending: [], history: [] });
+  const [txView, setTxView] = useState('PENDING'); // PENDING | HISTORY
+  const [txTypeFilter, setTxTypeFilter] = useState('ALL'); // ALL | DEPOSIT | WITHDRAWAL
+  const [txSearch, setTxSearch] = useState('');
+  const [txReview, setTxReview] = useState(null); // { tx, decision } awaiting confirmation
+  const [txNote, setTxNote] = useState('');
+  const [txBusy, setTxBusy] = useState(false);
+  const [newTx, setNewTx] = useState({}); // id -> true while a just-arrived request is highlighted
+  const [bellOpen, setBellOpen] = useState(false);
+  const [bellRing, setBellRing] = useState(false);
+  const [soundOn, setSoundOn] = useState(() => loadJSON('meridian_crm_sound', true));
+  const soundRef = useRef(true);
+  soundRef.current = soundOn;
+  const bellRef = useRef(null);
+  const seenTxRef = useRef(null); // ids already announced; null until the first load (so old requests don't all pop up)
+  const txStampRef = useRef(0); // last time a live event changed the queue (guards against late poll responses)
+  const txPending = txData.pending;
+  const txStats = useMemo(() => {
+    const dep = txPending.filter((t) => t.type === 'DEPOSIT');
+    const wd = txPending.filter((t) => t.type === 'WITHDRAWAL');
+    const sum = (a) => a.reduce((t, x) => t + (Number(x.amount) || 0), 0);
+    return { count: txPending.length, deposits: dep.length, withdrawals: wd.length, depositTotal: sum(dep), withdrawalTotal: sum(wd) };
+  }, [txPending]);
 
   // Client profile drawer / document lightbox
   const [profileClientId, setProfileClientId] = useState('');
@@ -1075,18 +1182,117 @@ export default function AdminPortal() {
     }
   }, []);
 
+  // A new deposit / withdrawal request: toast + chime + bell + highlighted row. Called from the live socket AND from
+  // polling (whichever sees it first); each request is announced exactly once.
+  const notifyNewTx = useCallback(
+    (tx) => {
+      if (!seenTxRef.current) seenTxRef.current = new Set();
+      if (seenTxRef.current.has(tx.id)) return;
+      seenTxRef.current.add(tx.id);
+      toast(`New ${tx.type === 'DEPOSIT' ? 'deposit' : 'withdrawal'} request: ${fmtUSD(tx.amount)} from ${tx.clientName || 'a client'}`, 'warn');
+      if (soundRef.current) playPing();
+      setBellRing(true);
+      setTimeout(() => setBellRing(false), 2000);
+      setNewTx((m) => ({ ...m, [tx.id]: true }));
+      setTimeout(
+        () =>
+          setNewTx((m) => {
+            const n = { ...m };
+            delete n[tx.id];
+            return n;
+          }),
+        4000
+      );
+    },
+    [toast]
+  );
+  const notifyNewTxRef = useRef(notifyNewTx);
+  notifyNewTxRef.current = notifyNewTx;
+
+  // The decided request leaves the pending queue and heads the history (used by our own action and by pushed events)
+  const applyProcessed = useCallback((tx) => {
+    if (!tx || !tx.id) return;
+    txStampRef.current = Date.now();
+    if (seenTxRef.current) seenTxRef.current.add(tx.id);
+    setTxData((prev) => ({
+      pending: prev.pending.filter((t) => t.id !== tx.id),
+      history: [tx, ...prev.history.filter((t) => t.id !== tx.id)].slice(0, 150)
+    }));
+  }, []);
+
+  const fetchTransactions = useCallback(async () => {
+    const startedAt = Date.now();
+    try {
+      const res = await apiFetch(API.transactions);
+      if (!res.ok) return;
+      const d = await readJson(res);
+      if (!Array.isArray(d.pending)) return;
+      if (txStampRef.current > startedAt) {
+        setTimeout(() => fetchTransactionsRef.current && fetchTransactionsRef.current(), 80); // answer may predate a live event
+        return;
+      }
+      const first = seenTxRef.current === null;
+      if (first) seenTxRef.current = new Set();
+      d.pending.forEach((t) => {
+        if (first) seenTxRef.current.add(t.id);
+        else notifyNewTxRef.current(t);
+      });
+      if (first && d.pending.length > 0) {
+        toast(`${d.pending.length} deposit / withdrawal request${d.pending.length === 1 ? ' is' : 's are'} awaiting review.`, 'warn');
+      }
+      setTxData({ pending: d.pending, history: Array.isArray(d.history) ? d.history : [] });
+    } catch {
+      /* the next poll or pushed event will catch up */
+    }
+  }, [toast]);
+  const fetchTransactionsRef = useRef(null);
+  fetchTransactionsRef.current = fetchTransactions;
+
   // Safety-net polling. Live updates arrive over the WebSocket below; this guarantees convergence
   // even if the socket is blocked by a proxy.
   useEffect(() => {
     if (!currentUser) return;
+    const admin = currentUser.role === 'ADMIN';
     fetchClients();
     fetchPortfolios();
+    if (admin) fetchTransactions();
     const interval = setInterval(() => {
       fetchClients();
       fetchPortfolios();
+      if (admin) fetchTransactions();
     }, 5000);
     return () => clearInterval(interval);
-  }, [currentUser, fetchClients, fetchPortfolios]);
+  }, [currentUser, fetchClients, fetchPortfolios, fetchTransactions]);
+
+  // Show the number of waiting requests in the browser tab title, and close the bell menu on an outside click / Escape
+  useEffect(() => {
+    if (!currentUser || currentUser.role !== 'ADMIN') return undefined;
+    const base = document.title.replace(/^\(\d+\)\s*/, '');
+    document.title = txStats.count > 0 ? `(${txStats.count}) ${base}` : base;
+    return () => {
+      document.title = base;
+    };
+  }, [currentUser, txStats.count]);
+  useEffect(() => {
+    if (!bellOpen) return undefined;
+    const onDown = (e) => {
+      if (bellRef.current && !bellRef.current.contains(e.target)) setBellOpen(false);
+    };
+    const onKey = (e) => e.key === 'Escape' && setBellOpen(false);
+    document.addEventListener('mousedown', onDown);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [bellOpen]);
+  useEffect(() => {
+    try {
+      localStorage.setItem('meridian_crm_sound', JSON.stringify(soundOn));
+    } catch {
+      /* storage unavailable */
+    }
+  }, [soundOn]);
 
   // Real-time channel: balance, KYC, documents, positions and equity are pushed the instant they change.
   useEffect(() => {
@@ -1102,6 +1308,7 @@ export default function AdminPortal() {
       refetchTimer = setTimeout(() => {
         fetchClients();
         fetchPortfolios();
+        if (currentUser.role === 'ADMIN') fetchTransactionsRef.current && fetchTransactionsRef.current();
       }, 150);
     };
     const known = (dbId) => clientsRef.current.some((c) => c.dbId === dbId);
@@ -1166,6 +1373,22 @@ export default function AdminPortal() {
             }
             return next;
           });
+          break;
+        case 'TRANSACTION_REQUEST':
+          if (currentUser.role !== 'ADMIN' || !m.transaction) break;
+          txStampRef.current = Date.now();
+          setTxData((prev) => (prev.pending.some((t) => t.id === m.transaction.id) ? prev : { ...prev, pending: [...prev.pending, m.transaction] }));
+          notifyNewTxRef.current(m.transaction);
+          break;
+        case 'TRANSACTION_PROCESSED':
+          if (currentUser.role !== 'ADMIN' || !m.transaction) break;
+          applyProcessed(m.transaction);
+          if (m.transaction.processedBy && m.transaction.processedBy !== currentUser.name) {
+            toast(`${m.transaction.processedBy} ${m.transaction.status === 'APPROVED' ? 'approved' : 'rejected'} a ${m.transaction.type.toLowerCase()} of ${fmtUSD(m.transaction.amount)} for ${m.transaction.clientName || 'a client'}.`, 'ok');
+          }
+          break;
+        case 'TRANSACTIONS_CHANGED':
+          if (currentUser.role === 'ADMIN') fetchTransactionsRef.current && fetchTransactionsRef.current();
           break;
         case 'CLIENT_EVENT':
           scheduleRefetch();
@@ -1829,6 +2052,51 @@ export default function AdminPortal() {
     }
   };
 
+  // ---- Approve / reject a deposit or withdrawal request (admin only) --------------------
+  const openTxReview = (tx, decision) => {
+    setTxNote('');
+    setTxReview({ tx, decision });
+  };
+  const confirmTxReview = async () => {
+    if (!txReview || currentUser.role !== 'ADMIN' || txBusy) return;
+    const { tx, decision } = txReview;
+    setTxBusy(true);
+    try {
+      const res = await apiFetch(API.reviewTransaction, {
+        method: 'POST',
+        headers: JSON_HEADERS,
+        body: JSON.stringify({ transactionId: tx.id, status: decision, note: txNote.trim() })
+      });
+      const data = await readJson(res);
+      if (!res.ok || !data.success) {
+        if (res.status !== 401) toast(`Not ${decision === 'APPROVED' ? 'approved' : 'rejected'}: ${data.error || `server returned ${res.status}`}`, 'bad');
+        fetchTransactions(); // somebody else may have just handled it
+        if (res.status === 409) setTxReview(null);
+        return;
+      }
+      const done = data.transaction || { ...tx, status: decision, processedBy: currentUser.name, processedAt: new Date().toISOString(), note: txNote.trim() };
+      applyProcessed(done);
+      if (decision === 'APPROVED' && Number.isFinite(Number(data.balance))) {
+        eventStampRef.current = Date.now();
+        setClients((prev) => prev.map((c) => (c.dbId === tx.clientId ? { ...c, balanceUSD: Number(data.balance), equityUSD: Number(data.balance) + (c.floatingPnl || 0) } : c)));
+      }
+      const who = tx.clientName || `CL-${tx.clientId}`;
+      addAuditLog(`${tx.type}_${decision}`, `${decision === 'APPROVED' ? 'Approved' : 'Rejected'} ${tx.type.toLowerCase()} of ${fmtUSD(tx.amount)} for ${who} (#${tx.id})`);
+      toast(
+        decision === 'REJECTED'
+          ? `${tx.type === 'DEPOSIT' ? 'Deposit' : 'Withdrawal'} of ${fmtUSD(tx.amount)} rejected. ${who}'s balance is unchanged.`
+          : tx.type === 'DEPOSIT'
+            ? `Deposit approved: ${fmtUSD(tx.amount)} credited to ${who}. New balance ${fmtUSD(data.balance)}.`
+            : `Withdrawal approved: ${fmtUSD(tx.amount)} deducted from ${who}. New balance ${fmtUSD(data.balance)}.`
+      );
+      setTxReview(null);
+    } catch {
+      toast('The server could not be reached. Nothing was changed.', 'bad');
+    } finally {
+      setTxBusy(false);
+    }
+  };
+
   // ---- Permanent deletion (admin only) --------------------------------------------------
   const [deleteTarget, setDeleteTarget] = useState(null); // { kind: 'client'|'agent', id, dbId, name, extra }
   const [deleteConfirm, setDeleteConfirm] = useState('');
@@ -1848,6 +2116,7 @@ export default function AdminPortal() {
         if (res.status !== 401) toast(`Delete failed: ${data.error || `server returned ${res.status}`}.`, 'bad');
         return;
       }
+      eventStampRef.current = Date.now(); // a poll already in flight still lists the deleted record: ignore it
       if (deleteTarget.kind === 'client') {
         setProfileClientId('');
         setClients((prev) => prev.filter((c) => c.dbId !== deleteTarget.dbId));
@@ -1921,12 +2190,12 @@ export default function AdminPortal() {
       <div className="mx-root min-h-screen flex items-center justify-center p-4">
         <style>{STYLES}</style>
         <div className="w-full max-w-[420px] mx-in-up">
-          <div className="mx-card p-8 sm:p-10 shadow-2xl shadow-black/50">
+          <div className="mx-card p-8 sm:p-10 shadow-2xl shadow-slate-900/10">
             <div className="flex flex-col items-center text-center mb-8">
-              <div className="p-3.5 rounded-2xl bg-[rgba(124,156,255,.12)] border border-[rgba(124,156,255,.3)] mb-5">
+              <div className="p-3.5 rounded-2xl bg-blue-50 border border-blue-200 mb-5">
                 <Shield className="w-7 h-7 text-[var(--accent)]" />
               </div>
-              <h1 className="text-xl font-semibold tracking-tight text-white">Meridian Market CRM</h1>
+              <h1 className="text-xl font-semibold tracking-tight text-[var(--ink)]">Meridian Market CRM</h1>
               <p className="text-sm text-[var(--muted)] mt-1.5">Sign in to your workspace</p>
             </div>
             <form onSubmit={handleLogin} className="space-y-4">
@@ -2013,6 +2282,7 @@ export default function AdminPortal() {
           {
             label: 'Administration',
             items: [
+              { id: 'transactions', label: 'Transactions', icon: Receipt, count: txStats.count, warn: true },
               { id: 'agents', label: 'Manage Agents', icon: UserCheck, count: agents.length },
               { id: 'financial_ops', label: 'Financial Adjustments', icon: Wallet }
             ]
@@ -2027,6 +2297,7 @@ export default function AdminPortal() {
     kyc: 'KYC Center',
     whatsapp: 'WhatsApp',
     dialer: 'Dialer',
+    transactions: 'Transactions',
     agents: 'Manage Agents',
     financial_ops: 'Financial Adjustments'
   };
@@ -2039,11 +2310,11 @@ export default function AdminPortal() {
   const sidebar = (
     <div className="flex flex-col h-full">
       <div className="px-5 pt-6 pb-5 flex items-center gap-3">
-        <div className="p-2 rounded-xl bg-[rgba(124,156,255,.12)] border border-[rgba(124,156,255,.3)]">
+        <div className="p-2 rounded-xl bg-blue-50 border border-blue-200">
           <Shield className="w-5 h-5 text-[var(--accent)]" />
         </div>
         <div>
-          <div className="text-[15px] font-semibold tracking-tight text-white leading-none">Meridian</div>
+          <div className="text-[15px] font-semibold tracking-tight text-[var(--ink)] leading-none">Meridian</div>
           <div className="text-[10px] uppercase tracking-[.2em] text-[var(--muted)] mt-1.5">Client CRM</div>
         </div>
       </div>
@@ -2075,10 +2346,10 @@ export default function AdminPortal() {
         ))}
       </nav>
       <div className="p-3 border-t border-[var(--line)]">
-        <div className="flex items-center gap-3 p-2.5 rounded-xl bg-[rgba(255,255,255,.025)] border border-[var(--line)]">
+        <div className="flex items-center gap-3 p-2.5 rounded-xl bg-[#F8FAFC] border border-[var(--line)]">
           <Avatar name={currentUser.name} size={34} />
           <div className="min-w-0 flex-1">
-            <div className="text-sm font-medium text-white truncate">{currentUser.name}</div>
+            <div className="text-sm font-medium text-[var(--ink)] truncate">{currentUser.name}</div>
             <span className={`mx-badge ${isAdmin ? 'mx-b-warn' : 'mx-b-accent'} !py-0 !text-[10px]`}>{currentUser.role}</span>
           </div>
           <button type="button" className="mx-icon-btn" onClick={handleLogout} title="Sign out" aria-label="Sign out">
@@ -2108,7 +2379,7 @@ export default function AdminPortal() {
       <style>{STYLES}</style>
 
       {/* Desktop sidebar */}
-      <aside className="hidden lg:block fixed inset-y-0 left-0 w-64 bg-[rgba(7,10,17,.7)] backdrop-blur border-r border-[var(--line)] z-30">
+      <aside className="hidden lg:block fixed inset-y-0 left-0 w-64 bg-white/95 backdrop-blur-xl border-r border-[var(--line)] z-30">
         {sidebar}
       </aside>
 
@@ -2116,12 +2387,12 @@ export default function AdminPortal() {
       {navOpen && (
         <div className="lg:hidden fixed inset-0 z-50 flex">
           <div className="w-72 max-w-[85vw] bg-[var(--panel)] border-r border-[var(--line)] mx-in-right">{sidebar}</div>
-          <button type="button" aria-label="Close menu" className="flex-1 bg-black/60" onClick={() => setNavOpen(false)} />
+          <button type="button" aria-label="Close menu" className="flex-1 bg-slate-900/40" onClick={() => setNavOpen(false)} />
         </div>
       )}
 
       <div className="lg:pl-64 min-h-screen flex flex-col min-w-0">
-        <header className="sticky top-0 z-30 bg-[rgba(7,10,17,.8)] backdrop-blur border-b border-[var(--line)] px-4 sm:px-8 h-16 flex items-center gap-3">
+        <header className="sticky top-0 z-30 bg-white/90 backdrop-blur-xl border-b border-slate-200 px-4 sm:px-6 xl:px-8 h-16 flex items-center gap-3">
           <div className="lg:hidden">
             <button type="button" className="mx-icon-btn" onClick={() => setNavOpen(true)} aria-label="Open menu">
               <Menu className="w-4 h-4" />
@@ -2130,7 +2401,7 @@ export default function AdminPortal() {
           <div className="flex items-center gap-2 text-sm min-w-0">
             <span className="text-[var(--muted)] hidden sm:inline">Meridian</span>
             <ChevronRight className="w-3.5 h-3.5 text-[var(--faint)] hidden sm:inline" />
-            <span className="font-medium text-white truncate">{pageTitles[activeCrmTab]}</span>
+            <span className="font-medium text-[var(--ink)] truncate">{pageTitles[activeCrmTab]}</span>
           </div>
           <div className="ml-auto flex items-center gap-2">
             <span
@@ -2140,6 +2411,85 @@ export default function AdminPortal() {
               <Activity className="w-3 h-3" />
               {syncError ? 'Sync issue' : liveLink === 'live' ? 'Live' : 'Reconnecting'}
             </span>
+            {isAdmin && (
+              <div className="relative" ref={bellRef}>
+                <button
+                  type="button"
+                  className={`mx-icon-btn !w-9 !h-9 relative ${bellRing ? 'mx-bell' : ''} ${txStats.count > 0 ? '!border-amber-300 !bg-amber-50' : ''}`}
+                  onClick={() => setBellOpen((o) => !o)}
+                  aria-label={`Deposit and withdrawal requests: ${txStats.count} waiting`}
+                  aria-expanded={bellOpen}
+                  aria-haspopup="true"
+                >
+                  {txStats.count > 0 ? <BellRing className="w-4 h-4 text-[var(--warn)]" /> : <Bell className="w-4 h-4" />}
+                  {txStats.count > 0 && (
+                    <span className="absolute -top-1.5 -right-1.5 min-w-[18px] h-[18px] px-1 rounded-full bg-[var(--bad)] text-white text-[10px] font-bold flex items-center justify-center mx-num">
+                      {txStats.count > 99 ? '99+' : txStats.count}
+                    </span>
+                  )}
+                </button>
+                {bellOpen && (
+                  <div className="absolute right-0 mt-2 w-[min(92vw,390px)] mx-card z-50 overflow-hidden mx-in-up shadow-xl">
+                    <div className="flex items-center justify-between px-4 py-3 border-b border-[var(--line)]">
+                      <div>
+                        <div className="text-sm font-bold text-[var(--ink)]">Cash requests</div>
+                        <div className="text-[11px] text-[var(--muted)]">
+                          {txStats.count === 0 ? 'Nothing waiting' : `${txStats.deposits} deposit${txStats.deposits === 1 ? '' : 's'} · ${txStats.withdrawals} withdrawal${txStats.withdrawals === 1 ? '' : 's'} waiting`}
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        className="mx-icon-btn"
+                        onClick={() => setSoundOn((v) => !v)}
+                        title={soundOn ? 'Sound on: click to mute' : 'Sound off: click to enable'}
+                        aria-label={soundOn ? 'Mute notification sound' : 'Enable notification sound'}
+                        aria-pressed={soundOn}
+                      >
+                        {soundOn ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
+                      </button>
+                    </div>
+                    <div className="max-h-[340px] overflow-y-auto">
+                      {txStats.count === 0 && <EmptyState icon={Inbox} title="You're all caught up" text="New deposit and withdrawal requests appear here the moment a client submits them." />}
+                      {[...txPending].reverse().slice(0, 8).map((t) => (
+                        <button
+                          key={t.id}
+                          type="button"
+                          className="w-full text-left flex items-center gap-3 px-4 py-3 mx-row border-b border-[var(--line)] last:border-0"
+                          onClick={() => {
+                            setTxView('PENDING');
+                            setBellOpen(false);
+                            goTab('transactions');
+                          }}
+                        >
+                          <span className={`p-2 rounded-xl border ${t.type === 'DEPOSIT' ? 'bg-emerald-50 border-emerald-200 text-emerald-700' : 'bg-amber-50 border-amber-200 text-amber-700'}`}>
+                            {t.type === 'DEPOSIT' ? <ArrowDownLeft className="w-4 h-4" /> : <ArrowUpRight className="w-4 h-4" />}
+                          </span>
+                          <span className="min-w-0 flex-1">
+                            <span className="block text-sm font-semibold text-[var(--ink)] truncate">{t.clientName}</span>
+                            <span className="block text-xs text-[var(--muted)]">
+                              {t.type === 'DEPOSIT' ? 'Deposit' : 'Withdrawal'} · {timeAgo(t.createdAt)}
+                            </span>
+                          </span>
+                          <span className="mx-num text-sm font-bold text-[var(--ink)]">{fmtUSD(t.amount)}</span>
+                        </button>
+                      ))}
+                    </div>
+                    <div className="p-3 border-t border-[var(--line)] bg-[var(--raised)]">
+                      <button
+                        type="button"
+                        className="mx-btn mx-btn-primary w-full"
+                        onClick={() => {
+                          setBellOpen(false);
+                          goTab('transactions');
+                        }}
+                      >
+                        <Receipt className="w-4 h-4" /> Open Transactions
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
             {liveCall && (
               <button
                 type="button"
@@ -2165,7 +2515,7 @@ export default function AdminPortal() {
           </div>
         </header>
 
-        <main className="flex-1 w-full max-w-[1400px] mx-auto p-4 sm:p-8">
+        <main className="flex-1 w-full min-w-0 max-w-none p-4 sm:p-6 xl:p-8">
           {/* DASHBOARD TAB */}
           {activeCrmTab === 'dashboard' && (
             <div className="space-y-6 mx-in-up">
@@ -2173,10 +2523,39 @@ export default function AdminPortal() {
                 title={`Welcome back, ${currentUser.name.split(' ')[0]}`}
                 subtitle={isAdmin ? 'Firm-wide overview of clients, compliance and communications.' : 'Overview of the accounts assigned to you.'}
               />
-              <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
+              {isAdmin && txStats.count > 0 && (
+                <div className="mx-card px-5 py-4 flex flex-wrap items-center justify-between gap-3 !border-amber-200 !bg-amber-50">
+                  <div className="flex items-center gap-3 min-w-0">
+                    <div className="p-2.5 rounded-xl bg-white border border-amber-200">
+                      <Banknote className="w-5 h-5 text-[var(--warn)]" />
+                    </div>
+                    <div className="min-w-0">
+                      <div className="text-sm font-bold text-[var(--ink)]">
+                        {txStats.count} cash request{txStats.count === 1 ? '' : 's'} awaiting your review
+                      </div>
+                      <div className="text-xs text-slate-600">
+                        {txStats.deposits} deposit{txStats.deposits === 1 ? '' : 's'} ({fmtUSD(txStats.depositTotal)}) · {txStats.withdrawals} withdrawal{txStats.withdrawals === 1 ? '' : 's'} ({fmtUSD(txStats.withdrawalTotal)})
+                      </div>
+                    </div>
+                  </div>
+                  <button type="button" className="mx-btn mx-btn-primary" onClick={() => goTab('transactions')}>
+                    Review requests
+                  </button>
+                </div>
+              )}
+              <div className={`grid grid-cols-2 ${isAdmin ? 'xl:grid-cols-5' : 'xl:grid-cols-4'} gap-4 w-full`}>
                 <StatCard label="Real Client Accounts" value={metrics.totalClients} hint={`${kycCounts.PENDING} awaiting KYC review`} />
                 <StatCard label="Total Portfolio Capital" value={fmtUSD(metrics.totalBal)} tone="text-[var(--ok)]" />
                 <StatCard label="Allocated Credit Bonuses" value={fmtUSD(metrics.totalBonus)} tone="text-[var(--warn)]" />
+                {isAdmin && (
+                  <StatCard
+                    label="Pending Cash Requests"
+                    value={txStats.count}
+                    tone={txStats.count > 0 ? 'text-[var(--warn)]' : 'text-[var(--ink)]'}
+                    hint={`${fmtUSD(txStats.depositTotal)} in · ${fmtUSD(txStats.withdrawalTotal)} out`}
+                    onClick={() => goTab('transactions')}
+                  />
+                )}
                 <StatCard label="Compliance Verification" value={`${metrics.verifiedRatio}%`} tone="text-[var(--accent)]">
                   <div className="h-1.5 rounded-full bg-[var(--raised)] mt-3 overflow-hidden">
                     <div className="h-full bg-[var(--accent)] rounded-full transition-all" style={{ width: `${metrics.verifiedRatio}%` }} />
@@ -2188,7 +2567,7 @@ export default function AdminPortal() {
                 <div className="mx-card p-6 xl:col-span-2">
                   <div className="flex items-center justify-between mb-5">
                     <div>
-                      <h3 className="text-sm font-semibold text-white">KYC queue</h3>
+                      <h3 className="text-sm font-semibold text-[var(--ink)]">KYC queue</h3>
                       <p className="text-xs text-[var(--muted)] mt-0.5">Clients waiting for identity review</p>
                     </div>
                     <button type="button" className="mx-btn mx-btn-sm" onClick={() => { setKycFilter('PENDING'); goTab('kyc'); }}>
@@ -2203,9 +2582,9 @@ export default function AdminPortal() {
                         <div style={{ width: `${(kycCounts.REJECTED / scopedClients.length) * 100}%`, background: 'var(--bad)' }} />
                       </div>
                       <div className="flex gap-5 mt-2.5 text-xs text-[var(--muted)]">
-                        <span><span className="inline-block w-2 h-2 rounded-full bg-[var(--ok)] mr-1.5" />Approved <b className="mx-num text-white">{kycCounts.APPROVED}</b></span>
-                        <span><span className="inline-block w-2 h-2 rounded-full bg-[var(--warn)] mr-1.5" />Pending <b className="mx-num text-white">{kycCounts.PENDING}</b></span>
-                        <span><span className="inline-block w-2 h-2 rounded-full bg-[var(--bad)] mr-1.5" />Rejected <b className="mx-num text-white">{kycCounts.REJECTED}</b></span>
+                        <span><span className="inline-block w-2 h-2 rounded-full bg-[var(--ok)] mr-1.5" />Approved <b className="mx-num text-[var(--ink)]">{kycCounts.APPROVED}</b></span>
+                        <span><span className="inline-block w-2 h-2 rounded-full bg-[var(--warn)] mr-1.5" />Pending <b className="mx-num text-[var(--ink)]">{kycCounts.PENDING}</b></span>
+                        <span><span className="inline-block w-2 h-2 rounded-full bg-[var(--bad)] mr-1.5" />Rejected <b className="mx-num text-[var(--ink)]">{kycCounts.REJECTED}</b></span>
                       </div>
                     </div>
                   )}
@@ -2217,7 +2596,7 @@ export default function AdminPortal() {
                         <div key={c.id} className="flex items-center gap-3 py-3">
                           <Avatar name={c.name} size={34} />
                           <button type="button" className="min-w-0 flex-1 text-left" onClick={() => openProfile(c.id, 'kyc')}>
-                            <div className="text-sm font-medium text-white truncate">{c.name}</div>
+                            <div className="text-sm font-medium text-[var(--ink)] truncate">{c.name}</div>
                             <div className="text-xs text-[var(--muted)]">{c.kycDocs.length} document{c.kycDocs.length === 1 ? '' : 's'} submitted</div>
                           </button>
                           <button type="button" className="mx-icon-btn ok" title="Approve" aria-label={`Approve KYC for ${c.name}`} onClick={() => handleKycReview(c.id, 'APPROVED')}>
@@ -2231,7 +2610,7 @@ export default function AdminPortal() {
                 </div>
 
                 <div className="mx-card p-6">
-                  <h3 className="text-sm font-semibold text-white mb-1">Pipeline stages</h3>
+                  <h3 className="text-sm font-semibold text-[var(--ink)] mb-1">Pipeline stages</h3>
                   <p className="text-xs text-[var(--muted)] mb-5">Clients by current stage</p>
                   {stageCounts.length === 0 ? (
                     <EmptyState title="No clients yet" />
@@ -2240,8 +2619,8 @@ export default function AdminPortal() {
                       {stageCounts.map(({ stage, n }) => (
                         <div key={stage}>
                           <div className="flex justify-between text-xs mb-1.5">
-                            <span className="text-slate-300">{prettyStage(stage)}</span>
-                            <span className="mx-num text-white">{n}</span>
+                            <span className="text-slate-600">{prettyStage(stage)}</span>
+                            <span className="mx-num text-[var(--ink)]">{n}</span>
                           </div>
                           <div className="h-1.5 rounded-full bg-[var(--raised)]">
                             <div className="h-full rounded-full bg-[var(--accent)]" style={{ width: `${(n / maxStage) * 100}%` }} />
@@ -2255,12 +2634,12 @@ export default function AdminPortal() {
 
               <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
                 <div className="mx-card p-6">
-                  <h3 className="text-sm font-semibold text-white mb-1">Today's calls</h3>
+                  <h3 className="text-sm font-semibold text-[var(--ink)] mb-1">Today's calls</h3>
                   <p className="text-xs text-[var(--muted)] mb-5">Voice activity from the Fonitel dialer</p>
                   <div className="grid grid-cols-3 gap-3 text-center">
                     {[['Calls', callStats.today], ['Talk time', fmtDuration(callStats.talk)], ['Answered', `${callStats.rate}%`]].map(([l, v]) => (
                       <div key={l} className="rounded-xl bg-[var(--bg)] border border-[var(--line)] py-3">
-                        <div className="mx-num text-lg font-semibold text-white">{v}</div>
+                        <div className="mx-num text-lg font-semibold text-[var(--ink)]">{v}</div>
                         <div className="text-[10px] uppercase tracking-wider text-[var(--muted)] mt-1">{l}</div>
                       </div>
                     ))}
@@ -2270,7 +2649,7 @@ export default function AdminPortal() {
                   </button>
                 </div>
                 <div className="mx-card p-6 xl:col-span-2">
-                  <h3 className="text-sm font-semibold text-white mb-4 flex items-center gap-2">
+                  <h3 className="text-sm font-semibold text-[var(--ink)] mb-4 flex items-center gap-2">
                     <Activity className="w-4 h-4 text-[var(--accent)]" /> Recent activity
                   </h3>
                   <div className="divide-y divide-[var(--line)]">
@@ -2278,7 +2657,7 @@ export default function AdminPortal() {
                       <div key={l.id} className="py-2.5 flex items-start gap-3">
                         <span className="mx-badge mx-b-neutral mx-num !text-[10px] mt-0.5">{l.action}</span>
                         <div className="min-w-0 flex-1">
-                          <div className="text-sm text-slate-200 truncate">{l.details}</div>
+                          <div className="text-sm text-slate-700 truncate">{l.details}</div>
                           <div className="text-[11px] text-[var(--muted)]">{l.user} · {l.timestamp}</div>
                         </div>
                       </div>
@@ -2330,7 +2709,7 @@ export default function AdminPortal() {
                 <div className="overflow-x-auto">
                   <table className="w-full text-sm min-w-[980px]">
                     <thead>
-                      <tr className="border-b border-[var(--line)] bg-[rgba(255,255,255,.02)]">
+                      <tr className="border-b border-[var(--line)] bg-[#F8FAFC]">
                         <th className="mx-th">Client Details</th>
                         <th className="mx-th">Phone / IP</th>
                         <th className="mx-th">Stage</th>
@@ -2361,7 +2740,7 @@ export default function AdminPortal() {
                               <div className="flex items-center gap-3">
                                 <Avatar name={client.name} />
                                 <div className="min-w-0">
-                                  <div className="font-semibold text-white flex items-center gap-2 flex-wrap">
+                                  <div className="font-semibold text-[var(--ink)] flex items-center gap-2 flex-wrap">
                                     {client.name}
                                     {client.resetRequested && <span className="mx-badge mx-b-warn !py-0 !text-[10px]">Reset requested</span>}
                                   </div>
@@ -2372,7 +2751,7 @@ export default function AdminPortal() {
                             <td className="mx-td">
                               <div className="flex items-center gap-2.5">
                                 <div>
-                                  <div className="mx-num text-white text-[13px]">{client.phone}</div>
+                                  <div className="mx-num text-[var(--ink)] text-[13px]">{client.phone}</div>
                                   <div className="text-[11px] text-[var(--muted)] flex items-center gap-1 mt-0.5 mx-num">
                                     <Globe className="w-3 h-3" />
                                     {client.ip}
@@ -2404,7 +2783,7 @@ export default function AdminPortal() {
                               <div className="mx-num text-[var(--warn)] text-[11px]">Bonus: {fmtUSD(client.bonusUSD)}</div>
                               {portfolio[client.dbId] && (
                                 <div className="mx-num text-[11px] text-[var(--muted)]">
-                                  Equity: <span className="text-white">{fmtUSD(equityOf(client))}</span>
+                                  Equity: <span className="text-[var(--ink)]">{fmtUSD(equityOf(client))}</span>
                                 </div>
                               )}
                             </td>
@@ -2422,7 +2801,7 @@ export default function AdminPortal() {
                                   ))}
                                 </select>
                               ) : (
-                                <span className="text-slate-300">{client.assignedAgent || 'Unassigned'}</span>
+                                <span className="text-slate-600">{client.assignedAgent || 'Unassigned'}</span>
                               )}
                             </td>
                           </tr>
@@ -2469,7 +2848,7 @@ export default function AdminPortal() {
                   <div className="overflow-x-auto">
                     <table className="w-full text-sm min-w-[900px]">
                       <thead>
-                        <tr className="border-b border-[var(--line)] bg-[rgba(255,255,255,.02)]">
+                        <tr className="border-b border-[var(--line)] bg-[#F8FAFC]">
                           <th className="mx-th">Client</th>
                           <th className="mx-th !text-right">Balance</th>
                           <th className="mx-th !text-right">Floating P&amp;L</th>
@@ -2504,14 +2883,14 @@ export default function AdminPortal() {
                                       <ChevronRight className={`w-4 h-4 text-[var(--muted)] transition ${open ? 'rotate-90' : ''}`} />
                                       <Avatar name={r.client.name} />
                                       <div className="min-w-0">
-                                        <div className="font-semibold text-white">{r.client.name}</div>
+                                        <div className="font-semibold text-[var(--ink)]">{r.client.name}</div>
                                         <div className="text-xs text-[var(--muted)]">{r.client.id}{isAdmin ? ` · ${r.client.assignedAgent || 'Unassigned'}` : ''}</div>
                                       </div>
                                     </div>
                                   </td>
-                                  <td className="mx-td text-right mx-num text-white">{fmtUSD(r.client.balanceUSD)}</td>
+                                  <td className="mx-td text-right mx-num text-[var(--ink)]">{fmtUSD(r.client.balanceUSD)}</td>
                                   <td className={`mx-td text-right mx-num font-medium ${r.openCount ? pnlTone(r.floating) : 'text-[var(--muted)]'}`}>{r.openCount ? fmtPnl(r.floating) : '—'}</td>
-                                  <td className="mx-td text-right mx-num font-semibold text-white">{fmtUSD(r.equity)}</td>
+                                  <td className="mx-td text-right mx-num font-semibold text-[var(--ink)]">{fmtUSD(r.equity)}</td>
                                   <td className="mx-td text-right mx-num text-[var(--muted)]">{r.openCount ? fmtUSD(r.marginUsed) : '—'}</td>
                                   <td className="mx-td text-right">
                                     <span className={`mx-badge ${r.openCount ? 'mx-b-accent' : 'mx-b-neutral'}`}>{r.openCount} open</span>
@@ -2519,7 +2898,7 @@ export default function AdminPortal() {
                                 </tr>
                                 {open && (
                                   <tr>
-                                    <td colSpan="6" className="!p-0 bg-[rgba(255,255,255,.015)]">
+                                    <td colSpan="6" className="!p-0 bg-[#F8FAFC]">
                                       <div className="px-6 py-4">
                                         {r.positions.length === 0 ? (
                                           <div className="text-xs text-[var(--muted)]">No open positions. Equity equals balance.</div>
@@ -2540,11 +2919,11 @@ export default function AdminPortal() {
                                             <tbody className="divide-y divide-[var(--line)]">
                                               {r.positions.map((p) => (
                                                 <tr key={p.id}>
-                                                  <td className="py-2 text-white font-medium">{p.symbol}</td>
+                                                  <td className="py-2 text-[var(--ink)] font-medium">{p.symbol}</td>
                                                   <td className="py-2">
                                                     <span className={`mx-badge ${p.side === 'BUY' ? 'mx-b-ok' : 'mx-b-bad'} !py-0`}>{p.side}</span>
                                                   </td>
-                                                  <td className="py-2 text-right mx-num text-white">{p.volume}</td>
+                                                  <td className="py-2 text-right mx-num text-[var(--ink)]">{p.volume}</td>
                                                   <td className="py-2 text-right mx-num">{fmtPrice(p.openPrice)}</td>
                                                   <td className="py-2 text-right mx-num">{fmtPrice(p.currentPrice)}</td>
                                                   <td className="py-2 text-right mx-num text-[var(--muted)]">{fmtUSD(p.margin)}</td>
@@ -2600,12 +2979,12 @@ export default function AdminPortal() {
                           <button
                             type="button"
                             onClick={() => setKycSelectedId(c.id)}
-                            className={`w-full text-left flex items-center gap-3 px-4 py-3.5 mx-row ${kycSelected?.id === c.id ? 'bg-[rgba(124,156,255,.09)]' : ''}`}
+                            className={`w-full text-left flex items-center gap-3 px-4 py-3.5 mx-row ${kycSelected?.id === c.id ? 'bg-[var(--accent-soft)]' : ''}`}
                             aria-current={kycSelected?.id === c.id}
                           >
                             <Avatar name={c.name} size={38} />
                             <div className="min-w-0 flex-1">
-                              <div className="text-sm font-medium text-white truncate">{c.name}</div>
+                              <div className="text-sm font-medium text-[var(--ink)] truncate">{c.name}</div>
                               <div className="text-xs text-[var(--muted)]">{c.kycDocs.length} doc{c.kycDocs.length === 1 ? '' : 's'} · {c.assignedAgent || 'Unassigned'}</div>
                             </div>
                             <KycBadge status={c.kycStatus} />
@@ -2621,7 +3000,7 @@ export default function AdminPortal() {
                       <div className="flex items-center gap-3 mb-5">
                         <Avatar name={kycSelected.name} size={44} />
                         <div className="min-w-0 flex-1">
-                          <div className="text-base font-semibold text-white truncate">{kycSelected.name}</div>
+                          <div className="text-base font-semibold text-[var(--ink)] truncate">{kycSelected.name}</div>
                           <div className="text-xs text-[var(--muted)] flex items-center gap-2 mx-num">{kycSelected.phone}</div>
                         </div>
                         <PhoneActions phone={kycSelected.phone} onCall={() => callClient(kycSelected)} onWhatsApp={() => openProfile(kycSelected.id, 'whatsapp')} />
@@ -2666,7 +3045,7 @@ export default function AdminPortal() {
                           <Avatar name={c.name} size={40} />
                           <div className="min-w-0 flex-1">
                             <div className="flex items-baseline justify-between gap-2">
-                              <span className="text-sm font-medium text-white truncate">{c.name}</span>
+                              <span className="text-sm font-medium text-[var(--ink)] truncate">{c.name}</span>
                               {last && <span className="text-[10px] text-[var(--muted)] shrink-0">{fmtClock(last.ts)}</span>}
                             </div>
                             <div className="text-xs text-[var(--muted)] truncate">
@@ -2713,7 +3092,7 @@ export default function AdminPortal() {
                   </div>
                   <div className="mx-card overflow-hidden">
                     <div className="flex flex-wrap items-center justify-between gap-3 p-4 border-b border-[var(--line)]">
-                      <h3 className="text-sm font-semibold text-white">Call logs</h3>
+                      <h3 className="text-sm font-semibold text-[var(--ink)]">Call logs</h3>
                       <div className="flex gap-1.5">
                         {[['ALL', 'All'], ['COMPLETED', 'Connected'], ['MISSED', 'Unanswered / failed']].map(([k, l]) => (
                           <button key={k} type="button" className={`mx-chip ${logFilter === k ? 'on' : ''}`} onClick={() => setLogFilter(k)}>{l}</button>
@@ -2746,7 +3125,7 @@ export default function AdminPortal() {
                                     <div className="flex items-center gap-2.5">
                                       <DirIcon className="w-4 h-4 text-[var(--muted)] shrink-0" />
                                       <div>
-                                        <div className="text-white font-medium">{l.clientName || l.number}</div>
+                                        <div className="text-[var(--ink)] font-medium">{l.clientName || l.number}</div>
                                         {l.clientName && <div className="mx-num text-[11px] text-[var(--muted)]">{l.number}</div>}
                                       </div>
                                     </div>
@@ -2755,7 +3134,7 @@ export default function AdminPortal() {
                                     <span className={`mx-badge ${l.channel === 'whatsapp' ? 'mx-b-ok' : 'mx-b-neutral'}`}>{l.channel === 'whatsapp' ? 'WhatsApp' : 'VoIP'}</span>
                                   </td>
                                   <td className="mx-td"><span className={`mx-badge ${m.badge}`}>{m.label}</span></td>
-                                  <td className="mx-td mx-num text-slate-300">{l.channel === 'whatsapp' ? '—' : fmtDuration(l.duration)}</td>
+                                  <td className="mx-td mx-num text-slate-600">{l.channel === 'whatsapp' ? '—' : fmtDuration(l.duration)}</td>
                                   <td className="mx-td text-xs text-[var(--muted)] whitespace-nowrap">{fmtDateTime(l.ts)}</td>
                                   <td className="mx-td text-right">
                                     <button
@@ -2782,13 +3161,182 @@ export default function AdminPortal() {
           )}
 
           {/* AGENTS MANAGEMENT TAB */}
+          {/* TRANSACTIONS TAB: deposit / withdrawal approval workflow */}
+          {activeCrmTab === 'transactions' && isAdmin && (() => {
+            const q = txSearch.trim().toLowerCase();
+            const matches = (t) =>
+              (txTypeFilter === 'ALL' || t.type === txTypeFilter) &&
+              (!q || `${t.clientName || ''} ${t.clientEmail || ''} CL-${t.clientId} ${t.reference || ''} ${t.method || ''} ${t.details || ''}`.toLowerCase().includes(q));
+            const rows = (txView === 'PENDING' ? [...txData.pending].reverse() : txData.history).filter(matches);
+            const net = txStats.depositTotal - txStats.withdrawalTotal;
+            const balanceOf = (t) => {
+              const c = clients.find((x) => x.dbId === t.clientId);
+              return c ? Number(c.balanceUSD) || 0 : null;
+            };
+            return (
+              <div className="space-y-6 mx-in-up">
+                <PageHeader
+                  title="Transactions"
+                  subtitle="Deposit and withdrawal requests from clients. Approving a deposit credits the client's balance; approving a withdrawal deducts it."
+                >
+                  <button type="button" className="mx-btn" onClick={fetchTransactions}>
+                    <RefreshCw className="w-4 h-4" /> Refresh
+                  </button>
+                </PageHeader>
+
+                <div className="grid grid-cols-2 xl:grid-cols-4 gap-4 w-full">
+                  <StatCard
+                    label="Awaiting review"
+                    value={txStats.count}
+                    tone={txStats.count > 0 ? 'text-[var(--warn)]' : 'text-[var(--ink)]'}
+                    hint={`${txStats.deposits} deposit${txStats.deposits === 1 ? '' : 's'} · ${txStats.withdrawals} withdrawal${txStats.withdrawals === 1 ? '' : 's'}`}
+                  />
+                  <StatCard label="Pending deposits" value={fmtUSD(txStats.depositTotal)} tone="text-[var(--ok)]" hint="Will be credited when approved" />
+                  <StatCard label="Pending withdrawals" value={fmtUSD(txStats.withdrawalTotal)} tone="text-[var(--warn)]" hint="Will be deducted when approved" />
+                  <StatCard label="Net pending flow" value={`${net >= 0 ? '+' : '-'}${fmtUSD(Math.abs(net))}`} tone={net >= 0 ? 'text-[var(--ok)]' : 'text-[var(--bad)]'} hint="Deposits minus withdrawals" />
+                </div>
+
+                <div className="mx-card overflow-hidden">
+                  <div className="p-4 sm:p-5 flex flex-wrap items-center gap-3 border-b border-[var(--line)]">
+                    <div className="flex gap-2" role="tablist" aria-label="Request list">
+                      <button type="button" role="tab" aria-selected={txView === 'PENDING'} className={`mx-chip ${txView === 'PENDING' ? 'on' : ''}`} onClick={() => setTxView('PENDING')}>
+                        Pending <span className="mx-num">{txData.pending.length}</span>
+                      </button>
+                      <button type="button" role="tab" aria-selected={txView === 'HISTORY'} className={`mx-chip ${txView === 'HISTORY' ? 'on' : ''}`} onClick={() => setTxView('HISTORY')}>
+                        History <span className="mx-num">{txData.history.length}</span>
+                      </button>
+                    </div>
+                    <span className="hidden sm:block w-px h-6 bg-[var(--line-strong)]" aria-hidden="true" />
+                    <div className="flex gap-2">
+                      {[
+                        ['ALL', 'All'],
+                        ['DEPOSIT', 'Deposits'],
+                        ['WITHDRAWAL', 'Withdrawals']
+                      ].map(([k, label]) => (
+                        <button key={k} type="button" className={`mx-chip ${txTypeFilter === k ? 'on' : ''}`} onClick={() => setTxTypeFilter(k)}>
+                          {label}
+                        </button>
+                      ))}
+                    </div>
+                    <div className="relative ml-auto w-full sm:w-72">
+                      <Search className="w-4 h-4 text-[var(--faint)] absolute left-3 top-1/2 -translate-y-1/2" />
+                      <input className="mx-field !pl-9" placeholder="Search client, email, reference…" value={txSearch} onChange={(e) => setTxSearch(e.target.value)} aria-label="Search requests" />
+                    </div>
+                  </div>
+
+                  {rows.length === 0 ? (
+                    <EmptyState
+                      icon={txView === 'PENDING' ? Inbox : Receipt}
+                      title={txView === 'PENDING' ? (txData.pending.length ? 'No requests match your filters' : 'No requests waiting') : txData.history.length ? 'No history matches your filters' : 'Nothing has been processed yet'}
+                      text={txView === 'PENDING' && !txData.pending.length ? 'New deposit and withdrawal requests show up here instantly, with a notification.' : undefined}
+                    />
+                  ) : (
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-sm min-w-[920px]">
+                        <thead>
+                          <tr className="border-b border-[var(--line)] bg-[#F8FAFC]">
+                            <th className="mx-th">Client</th>
+                            <th className="mx-th">Request</th>
+                            <th className="mx-th text-right">Amount</th>
+                            <th className="mx-th">Method &amp; details</th>
+                            {txView === 'PENDING' ? (
+                              <>
+                                <th className="mx-th">Requested</th>
+                                <th className="mx-th">Balance if approved</th>
+                                <th className="mx-th text-right">Decision</th>
+                              </>
+                            ) : (
+                              <>
+                                <th className="mx-th">Result</th>
+                                <th className="mx-th">Reviewed</th>
+                                <th className="mx-th">Note</th>
+                              </>
+                            )}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {rows.map((t) => {
+                            const bal = balanceOf(t);
+                            const after = bal === null ? null : t.type === 'DEPOSIT' ? bal + t.amount : bal - t.amount;
+                            const short = txView === 'PENDING' && t.type === 'WITHDRAWAL' && after !== null && after < -0.004;
+                            return (
+                              <tr key={t.id} className={`border-b border-[var(--line)] last:border-0 mx-row ${newTx[t.id] ? 'mx-new' : ''}`}>
+                                <td className="mx-td min-w-[190px]">
+                                  <div className="font-semibold text-[var(--ink)]">{t.clientName || `CL-${t.clientId}`}</div>
+                                  <div className="text-xs text-[var(--muted)] truncate max-w-[220px]">{t.clientEmail}</div>
+                                  <div className="text-[11px] text-[var(--faint)] mx-num whitespace-nowrap">
+                                    CL-{t.clientId} · {t.agentName || 'Unassigned'}
+                                  </div>
+                                </td>
+                                <td className="mx-td">
+                                  <TxTypeBadge type={t.type} />
+                                  <div className="text-[11px] text-[var(--faint)] mx-num mt-1">#{t.id}</div>
+                                </td>
+                                <td className="mx-td text-right mx-num font-extrabold text-[var(--ink)]">{fmtUSD(t.amount)}</td>
+                                <td className="mx-td text-xs text-[var(--muted)] max-w-[280px]">
+                                  <div className="text-[var(--ink)] font-semibold">{t.method || '—'}</div>
+                                  {t.reference && <div className="mx-num break-all">Ref: {t.reference}</div>}
+                                  {t.details && <div className="break-words">{t.details}</div>}
+                                </td>
+                                {txView === 'PENDING' ? (
+                                  <>
+                                    <td className="mx-td text-xs whitespace-nowrap">
+                                      <div className="text-[var(--ink)] font-medium">{timeAgo(t.createdAt)}</div>
+                                      <div className="text-[var(--faint)]">{fmtDateTime(t.createdAt)}</div>
+                                    </td>
+                                    <td className="mx-td text-xs mx-num">
+                                      {bal === null ? (
+                                        '—'
+                                      ) : (
+                                        <>
+                                          <div className="text-[var(--muted)]">{fmtUSD(bal)} →</div>
+                                          <div className={`font-bold ${short ? 'text-[var(--bad)]' : 'text-[var(--ink)]'}`}>{fmtUSD(after)}</div>
+                                          {short && <div className="text-[10px] text-[var(--bad)] font-sans font-semibold">Balance too low</div>}
+                                        </>
+                                      )}
+                                    </td>
+                                    <td className="mx-td">
+                                      <div className="flex gap-2 justify-end">
+                                        <button type="button" className="mx-btn mx-btn-sm mx-btn-ok" onClick={() => openTxReview(t, 'APPROVED')} disabled={short}>
+                                          <Check className="w-3.5 h-3.5" /> Approve
+                                        </button>
+                                        <button type="button" className="mx-btn mx-btn-sm mx-btn-bad" onClick={() => openTxReview(t, 'REJECTED')}>
+                                          <X className="w-3.5 h-3.5" /> Reject
+                                        </button>
+                                      </div>
+                                    </td>
+                                  </>
+                                ) : (
+                                  <>
+                                    <td className="mx-td">
+                                      <TxStatusBadge status={t.status} />
+                                    </td>
+                                    <td className="mx-td text-xs whitespace-nowrap">
+                                      <div className="text-[var(--ink)] font-medium">{t.processedBy || '—'}</div>
+                                      <div className="text-[var(--faint)]">{fmtDateTime(t.processedAt)}</div>
+                                    </td>
+                                    <td className="mx-td text-xs text-[var(--muted)] max-w-[220px] break-words">{t.note || '—'}</td>
+                                  </>
+                                )}
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              </div>
+            );
+          })()}
+
           {activeCrmTab === 'agents' && isAdmin && (
             <div className="mx-in-up">
               <PageHeader title="Manage Agents" subtitle="Create agent logins, see who is on your team, and remove agents who have left." />
               <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
                 {/* Create Agent Form */}
                 <div className="mx-card p-6 self-start">
-                  <h3 className="text-sm font-semibold text-white pb-4 mb-4 border-b border-[var(--line)] flex items-center gap-2">
+                  <h3 className="text-sm font-semibold text-[var(--ink)] pb-4 mb-4 border-b border-[var(--line)] flex items-center gap-2">
                     <UserPlus className="w-4 h-4 text-[var(--accent)]" />
                     Create New Agent
                   </h3>
@@ -2811,7 +3359,7 @@ export default function AdminPortal() {
 
                 {/* Existing Agents List */}
                 <div className="lg:col-span-2 mx-card p-6">
-                  <h3 className="text-sm font-semibold text-white pb-4 mb-4 border-b border-[var(--line)]">Registered Agents ({agents.length})</h3>
+                  <h3 className="text-sm font-semibold text-[var(--ink)] pb-4 mb-4 border-b border-[var(--line)]">Registered Agents ({agents.length})</h3>
                   {agents.length === 0 ? (
                     <EmptyState icon={UserCheck} title="No custom agents created yet" />
                   ) : (
@@ -2820,14 +3368,14 @@ export default function AdminPortal() {
                         <div key={ag.id} className="flex items-center gap-3 p-3.5 bg-[var(--bg)] border border-[var(--line)] rounded-xl">
                           <Avatar name={ag.name} />
                           <div className="min-w-0 flex-1">
-                            <div className="font-semibold text-white">{ag.name}</div>
+                            <div className="font-semibold text-[var(--ink)]">{ag.name}</div>
                             <div className="text-xs text-[var(--muted)] flex items-center gap-1.5 mt-0.5">
                               <Mail className="w-3 h-3" />
                               {ag.email}
                             </div>
                           </div>
                           <div className="text-right">
-                            <div className="mx-num text-sm text-white">{clients.filter((c) => (c.assignedAgent || '').trim().toLowerCase() === (ag.name || '').trim().toLowerCase()).length}</div>
+                            <div className="mx-num text-sm text-[var(--ink)]">{clients.filter((c) => (c.assignedAgent || '').trim().toLowerCase() === (ag.name || '').trim().toLowerCase()).length}</div>
                             <div className="text-[10px] uppercase tracking-wider text-[var(--muted)]">clients</div>
                           </div>
                           <span className="mx-num text-[11px] text-[var(--faint)] hidden sm:block">ID: {ag.id}</span>
@@ -2863,7 +3411,7 @@ export default function AdminPortal() {
               <PageHeader title="Financial Adjustments" subtitle="Manually credit, deduct or grant bonus funds. All changes are written to the audit log." />
               <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
                 <div className="mx-card p-6 lg:col-span-3">
-                  <h3 className="text-sm font-semibold text-white pb-4 mb-4 border-b border-[var(--line)]">Manual Balance Adjustment</h3>
+                  <h3 className="text-sm font-semibold text-[var(--ink)] pb-4 mb-4 border-b border-[var(--line)]">Manual Balance Adjustment</h3>
                   <form onSubmit={handleManualBalanceAdjustment} className="space-y-5">
                     <div>
                       <label className="mx-label" htmlFor="fin-acct">Select Account</label>
@@ -2878,16 +3426,16 @@ export default function AdminPortal() {
                       <span className="mx-label">Adjustment type</span>
                       <div className="grid grid-cols-3 gap-2" role="group" aria-label="Adjustment type">
                         {[
-                          ['ADD', '+ Add', 'bg-emerald-500/15 border-emerald-500/60 text-emerald-300'],
-                          ['MINUS', '- Deduct', 'bg-rose-500/15 border-rose-500/60 text-rose-300'],
-                          ['BONUS', '+ Bonus', 'bg-amber-500/15 border-amber-500/60 text-amber-300']
+                          ['ADD', '+ Add', 'bg-emerald-50 border-emerald-300 text-emerald-700'],
+                          ['MINUS', '- Deduct', 'bg-rose-50 border-rose-300 text-rose-700'],
+                          ['BONUS', '+ Bonus', 'bg-amber-50 border-amber-300 text-amber-700']
                         ].map(([k, l, on]) => (
                           <button
                             key={k}
                             type="button"
                             onClick={() => setAdjustmentType(k)}
                             aria-pressed={adjustmentType === k}
-                            className={`py-2.5 rounded-xl text-sm font-semibold border transition ${adjustmentType === k ? on : 'bg-[var(--bg)] border-[var(--line)] text-[var(--muted)] hover:text-white'}`}
+                            className={`py-2.5 rounded-xl text-sm font-semibold border transition ${adjustmentType === k ? on : 'bg-[var(--bg)] border-[var(--line)] text-[var(--muted)] hover:text-[var(--ink)]'}`}
                           >
                             {l}
                           </button>
@@ -2908,7 +3456,7 @@ export default function AdminPortal() {
                       <div className="flex items-center gap-3">
                         <Avatar name={financialTarget.name} size={44} />
                         <div className="min-w-0">
-                          <div className="font-semibold text-white truncate">{financialTarget.name}</div>
+                          <div className="font-semibold text-[var(--ink)] truncate">{financialTarget.name}</div>
                           <div className="text-xs text-[var(--muted)]">{financialTarget.id}</div>
                         </div>
                       </div>
@@ -2924,7 +3472,7 @@ export default function AdminPortal() {
                       </div>
                       {portfolio[financialTarget.dbId] && (
                         <div className="text-xs text-[var(--muted)] mx-num">
-                          Live equity <span className="text-white">{fmtUSD(equityOf(financialTarget))}</span> · {portfolio[financialTarget.dbId].openCount || 0} open position(s)
+                          Live equity <span className="text-[var(--ink)]">{fmtUSD(equityOf(financialTarget))}</span> · {portfolio[financialTarget.dbId].openCount || 0} open position(s)
                         </div>
                       )}
                       <KycBadge status={financialTarget.kycStatus} />
@@ -2941,7 +3489,7 @@ export default function AdminPortal() {
 
       {/* FLOATING DIALER */}
       {showFloatingDialer && (
-        <div className="fixed z-[70] bottom-4 left-4 lg:left-[17rem] w-[calc(100vw-2rem)] max-w-[340px] mx-in-up shadow-2xl shadow-black/60">
+        <div className="fixed z-[70] bottom-4 left-4 lg:left-[17rem] w-[calc(100vw-2rem)] max-w-[340px] mx-in-up shadow-2xl shadow-slate-900/10">
           <SoftPhone
             number={dialNumber}
             setNumber={setDialNumber}
@@ -2957,13 +3505,13 @@ export default function AdminPortal() {
       {/* CLIENT PROFILE DRAWER */}
       {profileClient && (
         <div className="fixed inset-0 z-[60] flex justify-end" role="dialog" aria-modal="true" aria-label={`${profileClient.name} profile`}>
-          <button type="button" aria-label="Close profile" className="absolute inset-0 bg-black/60 backdrop-blur-[2px]" onClick={() => setProfileClientId('')} />
+          <button type="button" aria-label="Close profile" className="absolute inset-0 bg-slate-900/40 backdrop-blur-[2px]" onClick={() => setProfileClientId('')} />
           <div className="relative w-full max-w-xl bg-[var(--panel)] border-l border-[var(--line-strong)] flex flex-col mx-in-right shadow-2xl">
             <div className="p-5 border-b border-[var(--line)]">
               <div className="flex items-start gap-3">
                 <Avatar name={profileClient.name} size={48} />
                 <div className="min-w-0 flex-1">
-                  <div className="text-lg font-semibold text-white truncate">{profileClient.name}</div>
+                  <div className="text-lg font-semibold text-[var(--ink)] truncate">{profileClient.name}</div>
                   <div className="flex flex-wrap items-center gap-2 mt-1">
                     <span className="mx-num text-xs text-[var(--muted)]">{profileClient.id}</span>
                     <span className="mx-badge mx-b-accent">{prettyStage(profileClient.stage)}</span>
@@ -3013,7 +3561,7 @@ export default function AdminPortal() {
                     role="tab"
                     aria-selected={profileTab === k}
                     onClick={() => setProfileTab(k)}
-                    className={`px-4 py-2.5 text-sm font-medium border-b-2 transition ${profileTab === k ? 'border-[var(--accent)] text-white' : 'border-transparent text-[var(--muted)] hover:text-white'}`}
+                    className={`px-4 py-2.5 text-sm font-medium border-b-2 transition ${profileTab === k ? 'border-[var(--accent)] text-[var(--ink)]' : 'border-transparent text-[var(--muted)] hover:text-[var(--ink)]'}`}
                   >
                     {l}
                   </button>
@@ -3043,7 +3591,7 @@ export default function AdminPortal() {
                         <div className="grid grid-cols-2 gap-3">
                           <div className="rounded-xl bg-[var(--bg)] border border-[var(--line)] p-4">
                             <div className="mx-eyebrow">Equity (live)</div>
-                            <div className="mx-num text-xl font-semibold text-white mt-1.5">{fmtUSD(equityOf(profileClient))}</div>
+                            <div className="mx-num text-xl font-semibold text-[var(--ink)] mt-1.5">{fmtUSD(equityOf(profileClient))}</div>
                           </div>
                           <div className="rounded-xl bg-[var(--bg)] border border-[var(--line)] p-4">
                             <div className="mx-eyebrow">Floating P&amp;L</div>
@@ -3059,7 +3607,7 @@ export default function AdminPortal() {
                               {pos.map((p) => (
                                 <li key={p.id} className="flex items-center gap-3 px-3 py-2.5 text-xs">
                                   <span className={`mx-badge ${p.side === 'BUY' ? 'mx-b-ok' : 'mx-b-bad'} !py-0`}>{p.side}</span>
-                                  <span className="text-white font-medium">{p.symbol}</span>
+                                  <span className="text-[var(--ink)] font-medium">{p.symbol}</span>
                                   <span className="text-[var(--muted)] mx-num">{p.volume} lots @ {fmtPrice(p.openPrice)}</span>
                                   <span className={`ml-auto mx-num font-semibold ${pnlTone(p.pnl)}`}>{fmtPnl(p.pnl)}</span>
                                 </li>
@@ -3071,14 +3619,14 @@ export default function AdminPortal() {
                     );
                   })()}
                   {profileClient.resetRequested && (
-                    <div className="rounded-xl border border-[rgba(245,181,61,.4)] bg-[rgba(245,181,61,.07)] p-3.5 text-sm text-slate-200">
+                    <div className="rounded-xl border border-[rgba(245,181,61,.4)] bg-[rgba(245,181,61,.07)] p-3.5 text-sm text-slate-700">
                       This client asked to reset their password. Verify who you are speaking to, then use <b>Reset password</b>.
                     </div>
                   )}
                   {resetResult && resetResult.clientId === profileClient.id && (
-                    <div className="rounded-xl border border-[rgba(52,211,153,.4)] bg-[rgba(52,211,153,.07)] p-3.5 text-sm text-slate-200">
+                    <div className="rounded-xl border border-[rgba(52,211,153,.4)] bg-[rgba(52,211,153,.07)] p-3.5 text-sm text-slate-700">
                       <div className="mx-eyebrow !text-[var(--ok)] mb-1">Password reset</div>
-                      Temporary password: <span className="mx-num font-semibold text-white select-all">{resetResult.password}</span>
+                      Temporary password: <span className="mx-num font-semibold text-[var(--ink)] select-all">{resetResult.password}</span>
                       <div className="text-xs text-[var(--muted)] mt-1">Give it to the client. They are asked to choose a new password the next time they sign in.</div>
                     </div>
                   )}
@@ -3092,7 +3640,7 @@ export default function AdminPortal() {
                     ].map(([k, v]) => (
                       <div key={k} className="flex items-center justify-between gap-4 py-3">
                         <dt className="text-[var(--muted)]">{k}</dt>
-                        <dd className="text-white text-right break-all">{v}</dd>
+                        <dd className="text-[var(--ink)] text-right break-all">{v}</dd>
                       </div>
                     ))}
                     <div className="flex items-center justify-between gap-4 py-3">
@@ -3111,7 +3659,7 @@ export default function AdminPortal() {
                             ))}
                           </select>
                         ) : (
-                          <span className="text-white">{profileClient.assignedAgent || 'Unassigned'}</span>
+                          <span className="text-[var(--ink)]">{profileClient.assignedAgent || 'Unassigned'}</span>
                         )}
                       </dd>
                     </div>
@@ -3155,7 +3703,7 @@ export default function AdminPortal() {
                             <li key={l.id} className="py-3 flex items-center gap-3">
                               <PhoneOutgoing className="w-4 h-4 text-[var(--muted)]" />
                               <div className="flex-1 min-w-0">
-                                <div className="text-sm text-white">{l.channel === 'whatsapp' ? 'WhatsApp call' : 'VoIP call'} · <span className="mx-num">{l.channel === 'whatsapp' ? '—' : fmtDuration(l.duration)}</span></div>
+                                <div className="text-sm text-[var(--ink)]">{l.channel === 'whatsapp' ? 'WhatsApp call' : 'VoIP call'} · <span className="mx-num">{l.channel === 'whatsapp' ? '—' : fmtDuration(l.duration)}</span></div>
                                 <div className="text-xs text-[var(--muted)]">{fmtDateTime(l.ts)}{l.agent ? ` · ${l.agent}` : ''}</div>
                               </div>
                               <span className={`mx-badge ${m.badge}`}>{m.label}</span>
@@ -3173,22 +3721,100 @@ export default function AdminPortal() {
       )}
 
       {/* DELETE CONFIRMATION */}
+      {/* Approve / reject confirmation: spells out exactly what happens to the balance */}
+      {txReview && (() => {
+        const { tx, decision } = txReview;
+        const approve = decision === 'APPROVED';
+        const live = clients.find((c) => c.dbId === tx.clientId);
+        const bal = live ? Number(live.balanceUSD) || 0 : null;
+        const after = bal === null ? null : tx.type === 'DEPOSIT' ? bal + tx.amount : bal - tx.amount;
+        const blocked = approve && tx.type === 'WITHDRAWAL' && after !== null && after < -0.004;
+        const dep = tx.type === 'DEPOSIT';
+        return (
+          <div className="fixed inset-0 z-[85] flex items-center justify-center p-4 bg-slate-900/50" role="alertdialog" aria-modal="true" aria-label={`${approve ? 'Approve' : 'Reject'} ${dep ? 'deposit' : 'withdrawal'}`}>
+            <button type="button" className="absolute inset-0 cursor-default" aria-label="Close" onClick={() => !txBusy && setTxReview(null)} />
+            <div className="relative mx-card p-6 w-full max-w-md mx-in-up">
+              <div className="flex items-start gap-3 mb-4">
+                <div className={`p-2.5 rounded-xl border ${approve ? 'bg-emerald-50 border-emerald-200 text-emerald-700' : 'bg-rose-50 border-rose-200 text-rose-700'}`}>
+                  {approve ? <Check className="w-5 h-5" /> : <X className="w-5 h-5" />}
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-[var(--ink)]">
+                    {approve ? 'Approve' : 'Reject'} {dep ? 'deposit' : 'withdrawal'} of {fmtUSD(tx.amount)}?
+                  </h3>
+                  <p className="text-sm text-[var(--muted)] mt-0.5">
+                    {tx.clientName || `CL-${tx.clientId}`} · {tx.method || '—'}
+                  </p>
+                </div>
+              </div>
+
+              <div className={`rounded-xl border p-3.5 text-sm ${blocked ? 'border-rose-200 bg-rose-50' : approve ? 'border-emerald-200 bg-emerald-50' : 'border-slate-200 bg-slate-50'}`}>
+                {approve ? (
+                  <>
+                    <div className="font-semibold text-[var(--ink)]">{dep ? `Credits ${fmtUSD(tx.amount)} to the client's balance` : `Deducts ${fmtUSD(tx.amount)} from the client's balance`}</div>
+                    {bal !== null && (
+                      <div className="mx-num mt-1.5 text-[13px]">
+                        {fmtUSD(bal)} → <span className={`font-bold ${blocked ? 'text-[var(--bad)]' : 'text-[var(--ink)]'}`}>{fmtUSD(after)}</span>
+                      </div>
+                    )}
+                    {blocked && <div className="text-xs text-[var(--bad)] font-semibold mt-1.5">The client's balance is lower than this withdrawal, so it cannot be approved. Reject it, or adjust the balance first.</div>}
+                  </>
+                ) : (
+                  <div className="font-semibold text-[var(--ink)]">The balance stays unchanged and the client is told the request was rejected.</div>
+                )}
+              </div>
+
+              {(tx.reference || tx.details) && (
+                <dl className="mt-3 text-xs text-[var(--muted)] space-y-1">
+                  {tx.reference && (
+                    <div className="flex gap-2">
+                      <dt className="shrink-0">Reference:</dt>
+                      <dd className="mx-num break-all text-[var(--ink)]">{tx.reference}</dd>
+                    </div>
+                  )}
+                  {tx.details && (
+                    <div className="flex gap-2">
+                      <dt className="shrink-0">Payout:</dt>
+                      <dd className="break-words text-[var(--ink)]">{tx.details}</dd>
+                    </div>
+                  )}
+                </dl>
+              )}
+
+              <label className="mx-label mt-4" htmlFor="tx-note">
+                {approve ? 'Internal note (optional)' : 'Reason shown to the client (optional)'}
+              </label>
+              <input id="tx-note" className="mx-field" maxLength={300} placeholder={approve ? 'e.g. Payment confirmed on-chain' : 'e.g. Payment not received'} value={txNote} onChange={(e) => setTxNote(e.target.value)} />
+
+              <div className="flex justify-end gap-2 mt-5">
+                <button type="button" className="mx-btn" onClick={() => setTxReview(null)} disabled={txBusy}>
+                  Cancel
+                </button>
+                <button type="button" className={`mx-btn ${approve ? 'mx-btn-primary' : 'mx-btn-bad'}`} onClick={confirmTxReview} disabled={txBusy || blocked}>
+                  {txBusy ? 'Working…' : approve ? (dep ? 'Approve & credit' : 'Approve & deduct') : 'Reject request'}
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
       {deleteTarget && (
-        <div className="fixed inset-0 z-[85] flex items-center justify-center p-4 bg-black/75" role="alertdialog" aria-modal="true" aria-label="Confirm permanent deletion">
+        <div className="fixed inset-0 z-[85] flex items-center justify-center p-4 bg-slate-900/50" role="alertdialog" aria-modal="true" aria-label="Confirm permanent deletion">
           <button type="button" className="absolute inset-0 cursor-default" aria-label="Cancel" onClick={() => !deleteBusy && setDeleteTarget(null)} />
-          <div className="relative mx-card p-6 w-full max-w-md mx-in-up shadow-2xl shadow-black/60">
+          <div className="relative mx-card p-6 w-full max-w-md mx-in-up shadow-2xl shadow-slate-900/10">
             <div className="flex items-start gap-3">
               <div className="p-2.5 rounded-xl bg-[rgba(251,113,133,.12)] border border-[rgba(251,113,133,.35)]">
                 <Trash2 className="w-5 h-5 text-[var(--bad)]" />
               </div>
               <div className="min-w-0">
-                <h3 className="text-base font-semibold text-white">Permanently delete {deleteTarget.kind === 'client' ? 'client' : 'agent'}?</h3>
+                <h3 className="text-base font-semibold text-[var(--ink)]">Permanently delete {deleteTarget.kind === 'client' ? 'client' : 'agent'}?</h3>
                 <p className="text-sm text-[var(--muted)] mt-1">
-                  <span className="text-white font-medium">{deleteTarget.name}</span> will be removed for good. This cannot be undone.
+                  <span className="text-[var(--ink)] font-medium">{deleteTarget.name}</span> will be removed for good. This cannot be undone.
                 </p>
               </div>
             </div>
-            <ul className="text-xs text-slate-300 mt-4 space-y-1.5 list-disc pl-5">
+            <ul className="text-xs text-slate-600 mt-4 space-y-1.5 list-disc pl-5">
               {deleteTarget.kind === 'client' ? (
                 <>
                   <li>Profile, login, balance and transaction history are erased.</li>
@@ -3203,7 +3829,7 @@ export default function AdminPortal() {
                 </>
               )}
             </ul>
-            <label className="mx-label mt-5" htmlFor="del-confirm">Type <span className="text-white">DELETE</span> to confirm</label>
+            <label className="mx-label mt-5" htmlFor="del-confirm">Type <span className="text-[var(--ink)]">DELETE</span> to confirm</label>
             <input id="del-confirm" type="text" autoFocus autoComplete="off" value={deleteConfirm} onChange={(e) => setDeleteConfirm(e.target.value)} className="mx-field" placeholder="DELETE" />
             <div className="flex justify-end gap-2 mt-5">
               <button type="button" className="mx-btn" disabled={deleteBusy} onClick={() => setDeleteTarget(null)}>Cancel</button>
@@ -3217,11 +3843,11 @@ export default function AdminPortal() {
 
       {/* DOCUMENT LIGHTBOX */}
       {docPreview && (
-        <div className="fixed inset-0 z-[80] flex items-center justify-center p-4 sm:p-10 bg-black/85" role="dialog" aria-modal="true" aria-label="Document preview">
+        <div className="fixed inset-0 z-[80] flex items-center justify-center p-4 sm:p-10 bg-slate-900/70" role="dialog" aria-modal="true" aria-label="Document preview">
           <button type="button" className="absolute inset-0 cursor-default" aria-label="Close preview" onClick={() => setDocPreview(null)} />
           <div className="relative max-w-4xl w-full max-h-full flex flex-col mx-in-up">
             <div className="flex items-center justify-between mb-3 text-sm">
-              <span className="text-white font-medium">{docPreview.type}</span>
+              <span className="text-white font-semibold drop-shadow">{docPreview.type}</span>
               <div className="flex gap-2">
                 <a href={docPreview.url} target="_blank" rel="noopener noreferrer" className="mx-btn mx-btn-sm">
                   <ExternalLink className="w-3.5 h-3.5" /> Open original
@@ -3231,22 +3857,22 @@ export default function AdminPortal() {
                 </button>
               </div>
             </div>
-            <img src={docPreview.url} alt={docPreview.type} className="max-h-[78vh] w-auto mx-auto rounded-xl border border-[var(--line-strong)] object-contain bg-black" />
+            <img src={docPreview.url} alt={docPreview.type} className="max-h-[78vh] w-auto mx-auto rounded-xl border border-[var(--line-strong)] object-contain bg-white" />
           </div>
         </div>
       )}
 
       {/* TOASTS */}
-      <div className="fixed z-[90] top-4 right-4 flex flex-col gap-2 w-[calc(100vw-2rem)] max-w-sm" role="status" aria-live="polite">
+      <div className="fixed z-[90] top-[4.5rem] right-4 flex flex-col gap-2 w-[calc(100vw-2rem)] max-w-sm" role="status" aria-live="polite">
         {toasts.map((t) => (
           <div
             key={t.id}
-            className={`mx-in-right flex gap-2.5 items-start rounded-xl border px-4 py-3 text-sm shadow-xl shadow-black/40 backdrop-blur bg-[rgba(13,18,28,.95)] ${
+            className={`mx-in-right flex gap-2.5 items-start rounded-xl border px-4 py-3 text-sm shadow-xl shadow-slate-900/10 backdrop-blur bg-white ${
               t.tone === 'bad' ? 'border-[rgba(251,113,133,.45)]' : t.tone === 'warn' ? 'border-[rgba(245,181,61,.45)]' : 'border-[rgba(52,211,153,.4)]'
             }`}
           >
             {t.tone === 'ok' ? <Check className="w-4 h-4 text-[var(--ok)] mt-0.5 shrink-0" /> : <AlertTriangle className={`w-4 h-4 mt-0.5 shrink-0 ${t.tone === 'bad' ? 'text-[var(--bad)]' : 'text-[var(--warn)]'}`} />}
-            <span className="text-slate-100">{t.message}</span>
+            <span className="text-[var(--ink)]">{t.message}</span>
           </div>
         ))}
       </div>
